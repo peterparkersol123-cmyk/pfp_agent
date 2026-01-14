@@ -3,6 +3,8 @@ Content generator that uses Claude API to create tweets with real-time ecosystem
 """
 
 import random
+import re
+from datetime import datetime, timezone
 from typing import Optional, List, Dict, Any
 from src.api.claude_client import ClaudeClient
 from src.api.pumpfun_client import PumpFunClient
@@ -39,6 +41,9 @@ class ContentGenerator:
         # Track recent content types for variety
         self.recent_topics: List[ContentType] = []
         self.topic_history_size = topic_history_size
+
+        # Track when "gm" was last used (date only, UTC)
+        self.last_gm_date: Optional[str] = None
 
         logger.info("Initialized ContentGenerator with Pump.fun data integration")
 
@@ -165,11 +170,28 @@ class ContentGenerator:
                 if content.startswith("'") and content.endswith("'"):
                     content = content[1:-1]
 
+                # Check if content contains "gm" and filter if already used today
+                if self._contains_gm(content):
+                    today = datetime.now(timezone.utc).strftime('%Y-%m-%d')
+                    if self.last_gm_date == today:
+                        logger.warning("Rejecting tweet with 'gm' - already used today")
+                        continue
+                    else:
+                        # This is the first gm of the day
+                        logger.info(f"Allowing 'gm' - first time today ({today})")
+
                 # Validate content
                 is_valid, errors = self.validator.validate(content)
 
                 if is_valid:
                     logger.info(f"Successfully generated valid tweet: {content[:50]}...")
+                    # Track this topic for variety
+                    if not custom_prompt:
+                        self._track_topic(template.content_type)
+                    # Update last gm date if content contains gm
+                    if self._contains_gm(content):
+                        self.last_gm_date = datetime.now(timezone.utc).strftime('%Y-%m-%d')
+                        logger.info(f"Updated last_gm_date to {self.last_gm_date}")
                     return content
                 else:
                     logger.warning(f"Generated content failed validation: {errors}")
@@ -180,6 +202,13 @@ class ContentGenerator:
 
                     if is_valid_sanitized:
                         logger.info("Successfully sanitized content")
+                        # Track this topic for variety
+                        if not custom_prompt:
+                            self._track_topic(template.content_type)
+                        # Update last gm date if content contains gm
+                        if self._contains_gm(sanitized):
+                            self.last_gm_date = datetime.now(timezone.utc).strftime('%Y-%m-%d')
+                            logger.info(f"Updated last_gm_date to {self.last_gm_date}")
                         return sanitized
 
             except Exception as e:
@@ -347,6 +376,20 @@ Make it Pepe-style: cheeky, smart, observant. Comment on the token naturally."""
             ContentType.SUPERCYCLE_VISION,  # NEW: Future predictions need current data as baseline
         ]
         return content_type in live_data_types
+
+    def _contains_gm(self, content: str) -> bool:
+        """
+        Check if content contains 'gm' (case insensitive, whole word).
+
+        Args:
+            content: Content to check
+
+        Returns:
+            True if contains 'gm'
+        """
+        # Match 'gm' as a whole word (not part of other words)
+        pattern = r'\bgm\b'
+        return bool(re.search(pattern, content, re.IGNORECASE))
 
     def _track_topic(self, content_type: ContentType) -> None:
         """
