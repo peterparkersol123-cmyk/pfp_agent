@@ -149,7 +149,7 @@ class ContentGenerator:
                     # Add live data context for relevant content types
                     if use_live_data and self._should_use_live_data(template.content_type):
                         ecosystem_context = self._build_ecosystem_context()
-                        user_prompt = f"{user_prompt}\n\n{ecosystem_context}\n\nUse this real-time data naturally in your tweet if relevant, but stay in character. Keep it SHORT - 1-2 lines max (under 100 characters preferred)."
+                        user_prompt = f"{user_prompt}\n\n{ecosystem_context}\n\nUse this real-time data naturally in your tweet if relevant, but stay in character. CRITICAL: Your tweet MUST be under 260 characters total. Keep it SHORT - 1-2 lines max (under 100 characters preferred). Complete your thought - no trailing off mid-sentence."
 
                 logger.debug(f"Using content type: {template.content_type.value if not custom_prompt else 'custom'}")
 
@@ -173,6 +173,9 @@ class ContentGenerator:
                     content = content[1:-1]
                 if content.startswith("'") and content.endswith("'"):
                     content = content[1:-1]
+
+                # Strip any emojis that slipped through
+                content = self._strip_emojis(content)
 
                 # Check if content contains "gm" and filter if already used today
                 if self._contains_gm(content):
@@ -206,23 +209,9 @@ class ContentGenerator:
                     return content
                 else:
                     logger.warning(f"Generated content failed validation: {errors}")
-
-                    # Try to sanitize
-                    sanitized = self.validator.sanitize(content)
-                    is_valid_sanitized, _ = self.validator.validate(sanitized)
-
-                    if is_valid_sanitized:
-                        logger.info("Successfully sanitized content")
-                        # Track this topic for variety
-                        if not custom_prompt:
-                            self._track_topic(template.content_type)
-                        # Update last gm date if content contains gm
-                        if self._contains_gm(sanitized):
-                            self.last_gm_date = datetime.now(timezone.utc).strftime('%Y-%m-%d')
-                            logger.info(f"Updated last_gm_date to {self.last_gm_date}")
-                        # Track tweet for similarity checking
-                        self._track_tweet(sanitized)
-                        return sanitized
+                    # Don't sanitize - reject and regenerate instead to avoid truncation
+                    # This ensures tweets are complete, not cut off mid-sentence
+                    continue
 
             except Exception as e:
                 logger.error(f"Error generating tweet: {e}", exc_info=True)
@@ -389,6 +378,33 @@ Make it Pepe-style: cheeky, smart, observant. Comment on the token naturally."""
             ContentType.SUPERCYCLE_VISION,  # NEW: Future predictions need current data as baseline
         ]
         return content_type in live_data_types
+
+    def _strip_emojis(self, content: str) -> str:
+        """
+        Remove all emoji characters from content.
+
+        Args:
+            content: Content to strip emojis from
+
+        Returns:
+            Content with emojis removed
+        """
+        # Remove emojis and other special Unicode characters
+        emoji_pattern = re.compile(
+            "["
+            "\U0001F600-\U0001F64F"  # emoticons
+            "\U0001F300-\U0001F5FF"  # symbols & pictographs
+            "\U0001F680-\U0001F6FF"  # transport & map symbols
+            "\U0001F1E0-\U0001F1FF"  # flags (iOS)
+            "\U00002702-\U000027B0"
+            "\U000024C2-\U0001F251"
+            "\U0001F900-\U0001F9FF"  # Supplemental Symbols and Pictographs
+            "\U0001FA00-\U0001FA6F"  # Chess Symbols
+            "\U00002600-\U000026FF"  # Miscellaneous Symbols
+            "]+",
+            flags=re.UNICODE
+        )
+        return emoji_pattern.sub('', content).strip()
 
     def _contains_gm(self, content: str) -> bool:
         """
