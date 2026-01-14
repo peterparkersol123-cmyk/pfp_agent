@@ -45,6 +45,10 @@ class ContentGenerator:
         # Track when "gm" was last used (date only, UTC)
         self.last_gm_date: Optional[str] = None
 
+        # Track last 10 tweets to avoid repetitive content
+        self.recent_tweets: List[str] = []
+        self.recent_tweets_limit = 10
+
         logger.info("Initialized ContentGenerator with Pump.fun data integration")
 
     def _build_ecosystem_context(self) -> str:
@@ -180,6 +184,11 @@ class ContentGenerator:
                         # This is the first gm of the day
                         logger.info(f"Allowing 'gm' - first time today ({today})")
 
+                # Check if content is too similar to recent tweets
+                if self._is_too_similar(content):
+                    logger.warning("Rejecting tweet - too similar to recent content")
+                    continue
+
                 # Validate content
                 is_valid, errors = self.validator.validate(content)
 
@@ -192,6 +201,8 @@ class ContentGenerator:
                     if self._contains_gm(content):
                         self.last_gm_date = datetime.now(timezone.utc).strftime('%Y-%m-%d')
                         logger.info(f"Updated last_gm_date to {self.last_gm_date}")
+                    # Track tweet for similarity checking
+                    self._track_tweet(content)
                     return content
                 else:
                     logger.warning(f"Generated content failed validation: {errors}")
@@ -209,6 +220,8 @@ class ContentGenerator:
                         if self._contains_gm(sanitized):
                             self.last_gm_date = datetime.now(timezone.utc).strftime('%Y-%m-%d')
                             logger.info(f"Updated last_gm_date to {self.last_gm_date}")
+                        # Track tweet for similarity checking
+                        self._track_tweet(sanitized)
                         return sanitized
 
             except Exception as e:
@@ -390,6 +403,73 @@ Make it Pepe-style: cheeky, smart, observant. Comment on the token naturally."""
         # Match 'gm' as a whole word (not part of other words)
         pattern = r'\bgm\b'
         return bool(re.search(pattern, content, re.IGNORECASE))
+
+    def _is_too_similar(self, new_content: str) -> bool:
+        """
+        Check if new content is too similar to recent tweets.
+        Uses word overlap and key phrase matching.
+
+        Args:
+            new_content: New tweet content to check
+
+        Returns:
+            True if too similar to recent tweets
+        """
+        if not self.recent_tweets:
+            return False
+
+        # Normalize content for comparison
+        new_words = set(re.findall(r'\b\w+\b', new_content.lower()))
+
+        # Extract key phrases (3+ words)
+        new_phrases = set()
+        words_list = new_content.lower().split()
+        for i in range(len(words_list) - 2):
+            phrase = ' '.join(words_list[i:i+3])
+            new_phrases.add(phrase)
+
+        for recent_tweet in self.recent_tweets:
+            recent_words = set(re.findall(r'\b\w+\b', recent_tweet.lower()))
+
+            # Calculate word overlap (excluding common words)
+            common_words = {'the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for', 'of', 'is', 'are', 'was', 'were'}
+            meaningful_new = new_words - common_words
+            meaningful_recent = recent_words - common_words
+
+            if meaningful_new and meaningful_recent:
+                overlap = len(meaningful_new & meaningful_recent) / len(meaningful_new)
+
+                # If more than 60% word overlap, it's too similar
+                if overlap > 0.6:
+                    logger.warning(f"Content too similar to recent tweet ({overlap:.1%} overlap)")
+                    return True
+
+            # Check for exact phrase matches (3+ words)
+            recent_phrases = set()
+            recent_words_list = recent_tweet.lower().split()
+            for i in range(len(recent_words_list) - 2):
+                phrase = ' '.join(recent_words_list[i:i+3])
+                recent_phrases.add(phrase)
+
+            phrase_overlap = new_phrases & recent_phrases
+            if phrase_overlap:
+                logger.warning(f"Content contains repeated phrase: {list(phrase_overlap)[0]}")
+                return True
+
+        return False
+
+    def _track_tweet(self, content: str) -> None:
+        """
+        Track a tweet in recent history for similarity checking.
+
+        Args:
+            content: Tweet content to track
+        """
+        self.recent_tweets.append(content)
+        # Keep only last N tweets
+        if len(self.recent_tweets) > self.recent_tweets_limit:
+            self.recent_tweets.pop(0)
+        logger.debug(f"Tracked tweet. Recent tweets count: {len(self.recent_tweets)}")
 
     def _track_topic(self, content_type: ContentType) -> None:
         """
