@@ -25,14 +25,18 @@ logger = get_logger(__name__)
 def main():
     """Run live posting test."""
 
+    # Get posting interval from environment variable
+    post_interval_minutes = int(os.getenv('POST_INTERVAL_MINUTES', '30'))
+    post_interval_seconds = post_interval_minutes * 60
+
     print("\n" + "="*70)
-    print("LIVE POSTING TEST - Every 1 Minute")
+    print(f"LIVE POSTING - Every {post_interval_minutes} Minutes")
     print("="*70)
     print()
     print("Configuration:")
     print(f"  Environment: {os.getenv('ENVIRONMENT')}")
     print(f"  Debug Mode: {os.getenv('DEBUG')}")
-    print(f"  Post Interval: {os.getenv('POST_INTERVAL_MINUTES')} minute(s)")
+    print(f"  Post Interval: {post_interval_minutes} minute(s)")
     print()
     print("Starting live posting to X...")
     print("Press Ctrl+C to stop")
@@ -58,7 +62,7 @@ def main():
                 if not tweet:
                     logger.error("Failed to generate tweet")
                     print("  ✗ Failed to generate tweet")
-                    time.sleep(60)
+                    time.sleep(post_interval_seconds)
                     continue
 
                 print(f"  Generated: {tweet[:80]}...")
@@ -78,11 +82,11 @@ def main():
                     print("  ✗ Failed to post")
                     logger.error("Failed to post tweet")
 
-                # Wait 1 minute
-                print(f"\n  Waiting 60 seconds until next tweet...")
-                print(f"  Next tweet at: {time.strftime('%H:%M:%S', time.localtime(time.time() + 60))}")
+                # Wait for configured interval
+                print(f"\n  Waiting {post_interval_minutes} minutes until next tweet...")
+                print(f"  Next tweet at: {time.strftime('%H:%M:%S', time.localtime(time.time() + post_interval_seconds))}")
 
-                time.sleep(60)
+                time.sleep(post_interval_seconds)
 
             except KeyboardInterrupt:
                 print("\n\nStopping...")
@@ -91,8 +95,8 @@ def main():
             except Exception as e:
                 logger.error(f"Error in posting loop: {e}", exc_info=True)
                 print(f"  ✗ Error: {e}")
-                print("  Waiting 60 seconds before retry...")
-                time.sleep(60)
+                print(f"  Waiting {post_interval_minutes} minutes before retry...")
+                time.sleep(post_interval_seconds)
 
     except KeyboardInterrupt:
         print("\n\nStopped by user")
