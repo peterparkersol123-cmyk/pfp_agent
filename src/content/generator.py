@@ -1,0 +1,449 @@
+"""
+Content generator that uses Claude API to create tweets with real-time ecosystem data.
+"""
+
+import random
+from typing import Optional, List, Dict, Any
+from src.api.claude_client import ClaudeClient
+from src.api.pumpfun_client import PumpFunClient
+from src.content.templates import PromptTemplates, ContentTemplate, ContentType
+from src.content.validator import ContentValidator
+from src.utils.logger import get_logger
+from src.utils.helpers import random_choice_weighted
+
+logger = get_logger(__name__)
+
+
+class ContentGenerator:
+    """Generates content using Claude API with real-time Pump.fun ecosystem data."""
+
+    def __init__(
+        self,
+        claude_client: Optional[ClaudeClient] = None,
+        pumpfun_client: Optional[PumpFunClient] = None,
+        topic_history_size: int = 5
+    ):
+        """
+        Initialize content generator.
+
+        Args:
+            claude_client: Claude API client (creates new one if not provided)
+            pumpfun_client: Pump.fun API client (creates new one if not provided)
+            topic_history_size: Number of recent topics to track for variety
+        """
+        self.claude_client = claude_client or ClaudeClient()
+        self.pumpfun_client = pumpfun_client or PumpFunClient()
+        self.validator = ContentValidator()
+        self.templates = PromptTemplates()
+
+        # Track recent content types for variety
+        self.recent_topics: List[ContentType] = []
+        self.topic_history_size = topic_history_size
+
+        logger.info("Initialized ContentGenerator with Pump.fun data integration")
+
+    def _build_ecosystem_context(self) -> str:
+        """
+        Build context string with real-time Pump.fun ecosystem data.
+
+        Returns:
+            Formatted context string for Claude
+        """
+        try:
+            logger.debug("Fetching ecosystem data for context")
+            context_data = self.pumpfun_client.get_context_for_content()
+
+            context_parts = ["Current Pump.fun ecosystem context:"]
+
+            # Add $PFP data FIRST (most important)
+            pfp_data = context_data.get('pfp_data')
+            if pfp_data:
+                price = pfp_data.get('price_usd', 0)
+                change_24h = pfp_data.get('price_change_24h', 0)
+                volume_24h = pfp_data.get('volume_24h', 0)
+
+                change_dir = "up" if change_24h > 0 else "down"
+                context_parts.append(f"- YOUR TOKEN $PFP: ${price:.8f} ({change_24h:+.2f}% 24h {change_dir}), ${volume_24h:,.0f} volume")
+                context_parts.append(f"  Chart: https://dexscreener.com/solana/gdfcd7l8x1giudfz1wthnheb352k3ni37rswtjgmglpt")
+
+            # Add narrative
+            if context_data.get('narrative'):
+                context_parts.append(f"- Current meta: {context_data['narrative']}")
+
+            # Add trending tokens
+            trending = context_data.get('trending_tokens', [])[:3]
+            if trending:
+                context_parts.append("- Trending tokens:")
+                for token in trending:
+                    name = token.get('name', 'Unknown')
+                    symbol = token.get('symbol', '???')
+                    context_parts.append(f"  * {name} (${symbol})")
+
+            # Add recent launches
+            recent = context_data.get('recent_launches', [])[:3]
+            if recent:
+                context_parts.append("- Recent launches:")
+                for token in recent:
+                    name = token.get('name', 'Unknown')
+                    context_parts.append(f"  * {name}")
+
+            # Add rug alerts
+            rugs = context_data.get('suspicious_activity', [])
+            if rugs:
+                context_parts.append(f"- {len(rugs)} suspicious tokens detected in last 24h")
+
+            # Add platform stats
+            stats = context_data.get('platform_stats', {})
+            if stats and stats.get('total_tokens'):
+                context_parts.append(f"- Platform: {stats.get('total_tokens', '???')} tokens, ${stats.get('volume_24h', '???')} 24h volume")
+
+            context_str = "\n".join(context_parts)
+            logger.debug("Built ecosystem context")
+            return context_str
+
+        except Exception as e:
+            logger.error(f"Error building ecosystem context: {e}")
+            return "Current Pump.fun ecosystem: live data unavailable, use general knowledge"
+
+    def generate_tweet(
+        self,
+        content_type: Optional[ContentType] = None,
+        custom_prompt: Optional[str] = None,
+        max_attempts: int = 3,
+        use_live_data: bool = True
+    ) -> Optional[str]:
+        """
+        Generate a single tweet with optional live ecosystem data.
+
+        Args:
+            content_type: Type of content to generate (random if not specified)
+            custom_prompt: Custom prompt to use instead of templates
+            max_attempts: Maximum attempts to generate valid content
+            use_live_data: Whether to include live Pump.fun data in context
+
+        Returns:
+            Generated tweet text or None if failed
+        """
+        for attempt in range(max_attempts):
+            try:
+                logger.debug(f"Generating tweet (attempt {attempt + 1}/{max_attempts})")
+
+                # Select template or use custom prompt
+                if custom_prompt:
+                    system_prompt = self.templates.BASE_SYSTEM_PROMPT
+                    user_prompt = custom_prompt
+                else:
+                    template = self._select_template(content_type)
+                    system_prompt = template.system_prompt
+                    user_prompt = random.choice(template.user_prompts)
+
+                    # Add live data context for relevant content types
+                    if use_live_data and self._should_use_live_data(template.content_type):
+                        ecosystem_context = self._build_ecosystem_context()
+                        user_prompt = f"{user_prompt}\n\n{ecosystem_context}\n\nUse this real-time data naturally in your tweet if relevant, but stay in character. Keep it SHORT - 1-2 lines max (under 100 characters preferred)."
+
+                logger.debug(f"Using content type: {template.content_type.value if not custom_prompt else 'custom'}")
+
+                # Generate content
+                content = self.claude_client.generate_content(
+                    prompt=user_prompt,
+                    system_prompt=system_prompt,
+                    max_tokens=100,  # Short tweets - most under 100 chars
+                    temperature=0.8  # Higher temperature for creativity
+                )
+
+                if not content:
+                    logger.warning(f"Failed to generate content on attempt {attempt + 1}")
+                    continue
+
+                # Clean up content
+                content = content.strip()
+
+                # Remove quotes if Claude added them
+                if content.startswith('"') and content.endswith('"'):
+                    content = content[1:-1]
+                if content.startswith("'") and content.endswith("'"):
+                    content = content[1:-1]
+
+                # Validate content
+                is_valid, errors = self.validator.validate(content)
+
+                if is_valid:
+                    logger.info(f"Successfully generated valid tweet: {content[:50]}...")
+                    return content
+                else:
+                    logger.warning(f"Generated content failed validation: {errors}")
+
+                    # Try to sanitize
+                    sanitized = self.validator.sanitize(content)
+                    is_valid_sanitized, _ = self.validator.validate(sanitized)
+
+                    if is_valid_sanitized:
+                        logger.info("Successfully sanitized content")
+                        return sanitized
+
+            except Exception as e:
+                logger.error(f"Error generating tweet: {e}", exc_info=True)
+
+        logger.error(f"Failed to generate valid tweet after {max_attempts} attempts")
+        return None
+
+    def generate_tweet_about_specific_token(
+        self,
+        token_address: str,
+        content_type: Optional[ContentType] = None
+    ) -> Optional[str]:
+        """
+        Generate a tweet about a specific token.
+
+        Args:
+            token_address: Token contract address
+            content_type: Type of content (defaults to TOKEN_LAUNCH)
+
+        Returns:
+            Generated tweet or None
+        """
+        try:
+            logger.info(f"Generating tweet about token {token_address[:8]}...")
+
+            # Fetch token data
+            token_data = self.pumpfun_client.get_token_info(token_address)
+
+            if not token_data:
+                logger.warning("Could not fetch token data")
+                return None
+
+            # Build custom prompt with token data
+            token_name = token_data.get('name', 'Unknown Token')
+            token_symbol = token_data.get('symbol', '???')
+            market_cap = token_data.get('market_cap', 'unknown')
+            price_change = token_data.get('price_change_24h', 0)
+
+            custom_prompt = f"""Tweet about this specific token on Pump.fun:
+Name: {token_name}
+Symbol: ${token_symbol}
+Market Cap: {market_cap}
+24h Change: {price_change}%
+
+Make it Pepe-style: cheeky, smart, observant. Comment on the token naturally."""
+
+            return self.generate_tweet(
+                custom_prompt=custom_prompt,
+                use_live_data=False  # Already have specific data
+            )
+
+        except Exception as e:
+            logger.error(f"Error generating token-specific tweet: {e}")
+            return None
+
+    def generate_thread(
+        self,
+        content_type: Optional[ContentType] = None,
+        topic: Optional[str] = None,
+        num_tweets: int = 3,
+        max_attempts: int = 3,
+        use_live_data: bool = True
+    ) -> Optional[List[str]]:
+        """
+        Generate a thread of tweets.
+
+        Args:
+            content_type: Type of content to generate
+            topic: Specific topic for the thread
+            num_tweets: Number of tweets in thread
+            max_attempts: Maximum attempts to generate valid thread
+            use_live_data: Whether to include live Pump.fun data
+
+        Returns:
+            List of tweet texts or None if failed
+        """
+        for attempt in range(max_attempts):
+            try:
+                logger.debug(f"Generating thread (attempt {attempt + 1}/{max_attempts})")
+
+                # Select template
+                template = self._select_template(content_type)
+
+                # Build thread prompt
+                base_context = ""
+                if use_live_data and self._should_use_live_data(template.content_type):
+                    base_context = self._build_ecosystem_context()
+
+                if topic:
+                    thread_prompt = f"Create a Twitter thread with {num_tweets} tweets about: {topic}. Each tweet should be on a separate line, numbered 1/, 2/, 3/, etc. Keep each tweet under 280 characters."
+                else:
+                    base_prompt = random.choice(template.user_prompts)
+                    thread_prompt = f"Expand on this topic into a Twitter thread with {num_tweets} tweets: {base_prompt}. Each tweet should be on a separate line, numbered 1/, 2/, 3/, etc. Keep each tweet under 280 characters."
+
+                if base_context:
+                    thread_prompt = f"{thread_prompt}\n\n{base_context}\n\nIncorporate this live data naturally if relevant."
+
+                # Generate thread content
+                content = self.claude_client.generate_content(
+                    prompt=thread_prompt,
+                    system_prompt=template.system_prompt,
+                    max_tokens=800,
+                    temperature=0.8
+                )
+
+                if not content:
+                    logger.warning(f"Failed to generate thread on attempt {attempt + 1}")
+                    continue
+
+                # Parse thread into individual tweets
+                tweets = self._parse_thread(content, num_tweets)
+
+                if not tweets or len(tweets) < num_tweets:
+                    logger.warning(f"Failed to parse thread correctly")
+                    continue
+
+                # Validate all tweets
+                all_valid = True
+                validated_tweets = []
+
+                for i, tweet in enumerate(tweets):
+                    is_valid, errors = self.validator.validate(tweet)
+                    if is_valid:
+                        validated_tweets.append(tweet)
+                    else:
+                        # Try to sanitize
+                        sanitized = self.validator.sanitize(tweet)
+                        is_valid_sanitized, _ = self.validator.validate(sanitized)
+                        if is_valid_sanitized:
+                            validated_tweets.append(sanitized)
+                        else:
+                            logger.warning(f"Tweet {i + 1} in thread failed validation: {errors}")
+                            all_valid = False
+                            break
+
+                if all_valid and len(validated_tweets) == num_tweets:
+                    logger.info(f"Successfully generated thread with {len(validated_tweets)} tweets")
+                    return validated_tweets
+
+            except Exception as e:
+                logger.error(f"Error generating thread: {e}", exc_info=True)
+
+        logger.error(f"Failed to generate valid thread after {max_attempts} attempts")
+        return None
+
+    def _should_use_live_data(self, content_type: ContentType) -> bool:
+        """
+        Determine if live data should be used for this content type.
+
+        Args:
+            content_type: Type of content being generated
+
+        Returns:
+            True if live data is relevant
+        """
+        # Use live data for these content types
+        live_data_types = [
+            ContentType.TOKEN_LAUNCH,
+            ContentType.MARKET_ANALYSIS,
+            ContentType.ECOSYSTEM_UPDATE,
+            ContentType.RAGE_BAIT,  # Hot takes on current events
+            ContentType.PFP_SHILL,  # NEW: $PFP content needs live price data
+            ContentType.PFP_PRICE_ACTION,  # NEW: $PFP price action needs real data
+            ContentType.SUPERCYCLE_VISION,  # NEW: Future predictions need current data as baseline
+        ]
+        return content_type in live_data_types
+
+    def _track_topic(self, content_type: ContentType) -> None:
+        """
+        Track a topic to maintain variety.
+
+        Args:
+            content_type: Content type that was just used
+        """
+        self.recent_topics.append(content_type)
+        # Keep only last N topics
+        if len(self.recent_topics) > self.topic_history_size:
+            self.recent_topics.pop(0)
+        logger.debug(f"Tracked topic: {content_type.value}. Recent: {[t.value for t in self.recent_topics]}")
+
+    def _select_template(self, content_type: Optional[ContentType] = None) -> ContentTemplate:
+        """
+        Select a template, either specific type or weighted random.
+        Avoids recently used topics for variety.
+
+        Args:
+            content_type: Specific content type to use
+
+        Returns:
+            Selected template
+        """
+        if content_type:
+            return self.templates.get_template_by_type(content_type)
+
+        # Weighted random selection with topic variety
+        weighted_templates = self.templates.get_weighted_templates()
+
+        # Filter out recently used topics if we have history
+        if len(self.recent_topics) >= 2:
+            # Don't use topics from last 2 tweets
+            recent_set = set(self.recent_topics[-2:])
+            available_templates = [
+                t for t in weighted_templates
+                if t["template"].content_type not in recent_set
+            ]
+
+            # If we filtered out everything, just use all templates
+            if not available_templates:
+                available_templates = weighted_templates
+                logger.debug("All topics recently used, allowing all")
+            else:
+                logger.debug(f"Filtered out recent topics: {[t.value for t in recent_set]}")
+
+            weighted_templates = available_templates
+
+        selected = random_choice_weighted(weighted_templates, weight_key="weight")
+        return selected["template"]
+
+    def _parse_thread(self, content: str, expected_count: int) -> List[str]:
+        """
+        Parse thread content into individual tweets.
+
+        Args:
+            content: Raw thread content
+            expected_count: Expected number of tweets
+
+        Returns:
+            List of individual tweets
+        """
+        tweets = []
+
+        # Try parsing numbered format (1/, 2/, etc.)
+        lines = content.strip().split('\n')
+        current_tweet = []
+
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+
+            # Check if line starts with number/
+            if any(line.startswith(f"{i}/") or line.startswith(f"{i}.") for i in range(1, expected_count + 2)):
+                if current_tweet:
+                    tweet_text = ' '.join(current_tweet)
+                    # Remove numbering
+                    tweet_text = tweet_text.split('/', 1)[-1].strip()
+                    tweet_text = tweet_text.split('.', 1)[-1].strip()
+                    tweets.append(tweet_text)
+                    current_tweet = []
+
+                current_tweet.append(line)
+            else:
+                current_tweet.append(line)
+
+        # Add last tweet
+        if current_tweet:
+            tweet_text = ' '.join(current_tweet)
+            tweet_text = tweet_text.split('/', 1)[-1].strip()
+            tweet_text = tweet_text.split('.', 1)[-1].strip()
+            tweets.append(tweet_text)
+
+        # If parsing failed, try splitting by newlines
+        if len(tweets) < expected_count:
+            tweets = [line.strip() for line in lines if line.strip()]
+
+        return tweets[:expected_count]
