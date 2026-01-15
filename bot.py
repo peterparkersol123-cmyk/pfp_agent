@@ -19,6 +19,7 @@ from src.api.twitter_client import TwitterClient
 from src.engagement.tracker import EngagementTracker
 from src.engagement.reply_handler import ReplyHandler
 from src.engagement.account_monitor import AccountMonitor
+from src.engagement.mention_handler import MentionHandler
 
 setup_logger()
 logger = get_logger(__name__)
@@ -62,6 +63,7 @@ def main():
         engagement_tracker = EngagementTracker(twitter)
         reply_handler = ReplyHandler(twitter, max_replies_per_tweet=max_replies_per_tweet) if enable_replies else None
         account_monitor = AccountMonitor(twitter, target_usernames=monitored_accounts) if monitored_accounts else None
+        mention_handler = MentionHandler(twitter, max_replies_per_hour=4) if enable_replies else None
 
         logger.info("Bot started successfully")
 
@@ -77,7 +79,7 @@ def main():
 
                 # Step 0: Check monitored accounts and reply to their tweets
                 if account_monitor:
-                    print("[0/5] Checking monitored accounts for new tweets...")
+                    print("[0/6] Checking monitored accounts for new tweets...")
                     replies_to_accounts = account_monitor.check_and_reply_to_accounts(look_back_minutes=post_interval_minutes + 30)
                     if replies_to_accounts > 0:
                         print(f"  ✓ Posted {replies_to_accounts} replies to monitored accounts")
@@ -85,9 +87,19 @@ def main():
                         print(f"  No new tweets from monitored accounts")
                     print()
 
+                # Step 0.5: Check for mentions and reply
+                if mention_handler:
+                    print("[0.5/6] Checking for mentions...")
+                    mentions_replied = mention_handler.handle_mentions(look_back_minutes=post_interval_minutes + 30)
+                    if mentions_replied > 0:
+                        print(f"  ✓ Replied to {mentions_replied} mentions")
+                    else:
+                        print(f"  No new mentions to reply to")
+                    print()
+
                 # Step 1: Check for replies on recent tweets
                 if enable_replies and reply_handler and recent_tweets:
-                    print("[1/5] Checking for replies on recent tweets...")
+                    print("[1/6] Checking for replies on recent tweets...")
                     for tweet_data in recent_tweets[-3:]:  # Check last 3 tweets
                         tweet_id = tweet_data['id']
                         tweet_text = tweet_data['text']
@@ -110,7 +122,7 @@ def main():
 
                 # Step 2: Update engagement metrics
                 if recent_tweets:
-                    print("[2/5] Updating engagement metrics...")
+                    print("[2/6] Updating engagement metrics...")
                     for tweet_data in recent_tweets[-5:]:  # Track last 5
                         metrics = engagement_tracker.update_metrics(tweet_data['id'])
                         if metrics:
@@ -126,7 +138,7 @@ def main():
                     print()
 
                 # Step 3: Generate new tweet (with style learning from top tweets)
-                print("[3/5] Generating new tweet...")
+                print("[3/6] Generating new tweet...")
 
                 # Check if we have enough data for style learning
                 has_style_data = len(engagement_tracker.tracked_tweets) >= 2
@@ -148,7 +160,7 @@ def main():
                 print(f"  Length: {len(tweet)} chars")
 
                 # Step 4: Post tweet
-                print("\n[4/5] Posting to X...")
+                print("\n[4/6] Posting to X...")
                 result = twitter.post_tweet(tweet)
 
                 if result:
