@@ -18,6 +18,7 @@ from src.content.generator import ContentGenerator
 from src.api.twitter_client import TwitterClient
 from src.engagement.tracker import EngagementTracker
 from src.engagement.reply_handler import ReplyHandler
+from src.engagement.account_monitor import AccountMonitor
 
 setup_logger()
 logger = get_logger(__name__)
@@ -32,6 +33,10 @@ def main():
     enable_replies = os.getenv('ENABLE_REPLY_SYSTEM', 'True').lower() == 'true'
     max_replies_per_tweet = int(os.getenv('MAX_REPLIES_PER_TWEET', '2'))
 
+    # Get monitored accounts (comma-separated usernames)
+    monitored_accounts_str = os.getenv('MONITORED_ACCOUNTS', '')
+    monitored_accounts = [acc.strip().lstrip('@') for acc in monitored_accounts_str.split(',') if acc.strip()]
+
     print("\n" + "="*70)
     print("PUMP.FUN PEPE BOT - PRODUCTION MODE")
     print("="*70)
@@ -41,6 +46,10 @@ def main():
     print(f"  Post Interval: {post_interval_minutes} minutes ({post_interval_minutes/60:.1f} hours)")
     print(f"  Reply System: {'Enabled' if enable_replies else 'Disabled'}")
     print(f"  Max Replies Per Tweet: {max_replies_per_tweet}")
+    print(f"  Monitored Accounts: {len(monitored_accounts)} accounts")
+    if monitored_accounts:
+        for acc in monitored_accounts:
+            print(f"    - @{acc}")
     print()
     print("Starting bot...")
     print("Press Ctrl+C to stop")
@@ -52,6 +61,7 @@ def main():
         twitter = TwitterClient()
         engagement_tracker = EngagementTracker(twitter)
         reply_handler = ReplyHandler(twitter, max_replies_per_tweet=max_replies_per_tweet) if enable_replies else None
+        account_monitor = AccountMonitor(twitter, target_usernames=monitored_accounts) if monitored_accounts else None
 
         logger.info("Bot started successfully")
 
@@ -65,9 +75,19 @@ def main():
                 print(f"[Cycle {tweet_count}] Starting new posting cycle")
                 print(f"{'='*70}\n")
 
+                # Step 0: Check monitored accounts and reply to their tweets
+                if account_monitor:
+                    print("[0/5] Checking monitored accounts for new tweets...")
+                    replies_to_accounts = account_monitor.check_and_reply_to_accounts(look_back_minutes=post_interval_minutes + 30)
+                    if replies_to_accounts > 0:
+                        print(f"  ✓ Posted {replies_to_accounts} replies to monitored accounts")
+                    else:
+                        print(f"  No new tweets from monitored accounts")
+                    print()
+
                 # Step 1: Check for replies on recent tweets
                 if enable_replies and reply_handler and recent_tweets:
-                    print("[1/4] Checking for replies on recent tweets...")
+                    print("[1/5] Checking for replies on recent tweets...")
                     for tweet_data in recent_tweets[-3:]:  # Check last 3 tweets
                         tweet_id = tweet_data['id']
                         tweet_text = tweet_data['text']
@@ -90,7 +110,7 @@ def main():
 
                 # Step 2: Update engagement metrics
                 if recent_tweets:
-                    print("[2/4] Updating engagement metrics...")
+                    print("[2/5] Updating engagement metrics...")
                     for tweet_data in recent_tweets[-5:]:  # Track last 5
                         metrics = engagement_tracker.update_metrics(tweet_data['id'])
                         if metrics:
@@ -106,7 +126,7 @@ def main():
                     print()
 
                 # Step 3: Generate new tweet (with style learning from top tweets)
-                print("[3/4] Generating new tweet...")
+                print("[3/5] Generating new tweet...")
 
                 # Check if we have enough data for style learning
                 has_style_data = len(engagement_tracker.tracked_tweets) >= 2
@@ -128,7 +148,7 @@ def main():
                 print(f"  Length: {len(tweet)} chars")
 
                 # Step 4: Post tweet
-                print("\n[4/4] Posting to X...")
+                print("\n[4/5] Posting to X...")
                 result = twitter.post_tweet(tweet)
 
                 if result:
