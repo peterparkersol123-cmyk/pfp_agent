@@ -3,6 +3,7 @@ Twitter API client for posting content.
 Handles communication with Twitter API v2.
 """
 
+import os
 import time
 from typing import Optional, List, Dict, Any
 import tweepy
@@ -59,6 +60,10 @@ class TwitterClient:
 
         self.max_tweet_length = settings.MAX_TWEET_LENGTH
         self.should_post = settings.should_post_to_twitter()
+        self.community_id = os.getenv('TWITTER_COMMUNITY_ID')  # Optional community posting
+
+        if self.community_id:
+            logger.info(f"Community posting enabled: {self.community_id}")
 
     def post_tweet(
         self,
@@ -96,7 +101,15 @@ class TwitterClient:
             try:
                 logger.debug(f"Posting tweet (attempt {attempt + 1}/{max_retries})")
 
-                response = self.client.create_tweet(text=text)
+                # Create tweet parameters
+                tweet_params = {'text': text}
+
+                # Add community_id if configured
+                if self.community_id:
+                    tweet_params['community_id'] = self.community_id
+                    logger.debug(f"Posting to community: {self.community_id}")
+
+                response = self.client.create_tweet(**tweet_params)
 
                 if response.data:
                     tweet_id = response.data['id']
