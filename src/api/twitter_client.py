@@ -68,14 +68,16 @@ class TwitterClient:
     def post_tweet(
         self,
         text: str,
-        max_retries: int = 3
+        max_retries: int = 3,
+        also_post_to_timeline: bool = True
     ) -> Optional[Dict[str, Any]]:
         """
-        Post a tweet.
+        Post a tweet, optionally to both community and main timeline.
 
         Args:
             text: Tweet text
             max_retries: Maximum number of retry attempts
+            also_post_to_timeline: If community posting is enabled, also post to main timeline
 
         Returns:
             Tweet data or None if failed
@@ -97,31 +99,67 @@ class TwitterClient:
                 "debug": True
             }
 
+        results = []
+
         for attempt in range(max_retries):
             try:
                 logger.debug(f"Posting tweet (attempt {attempt + 1}/{max_retries})")
 
-                # Create tweet parameters
-                tweet_params = {'text': text}
-
-                # Add community_id if configured
+                # Post to community if configured
                 if self.community_id:
-                    tweet_params['community_id'] = self.community_id
-                    logger.debug(f"Posting to community: {self.community_id}")
+                    logger.info(f"Posting to community: {self.community_id}")
+                    community_params = {'text': text, 'community_id': self.community_id}
+                    community_response = self.client.create_tweet(**community_params)
 
-                response = self.client.create_tweet(**tweet_params)
+                    if community_response.data:
+                        community_tweet_id = community_response.data['id']
+                        logger.info(f"Successfully posted to community (ID: {community_tweet_id})")
+                        results.append({
+                            "id": community_tweet_id,
+                            "text": text,
+                            "location": "community",
+                            "data": community_response.data
+                        })
+                    else:
+                        logger.warning("Failed to post to community")
 
-                if response.data:
-                    tweet_id = response.data['id']
-                    logger.info(f"Successfully posted tweet (ID: {tweet_id})")
-                    return {
-                        "id": tweet_id,
-                        "text": text,
-                        "data": response.data
-                    }
+                    # Also post to main timeline if requested
+                    if also_post_to_timeline:
+                        logger.info("Also posting to main timeline...")
+                        time.sleep(2)  # Small delay between posts
+                        timeline_params = {'text': text}
+                        timeline_response = self.client.create_tweet(**timeline_params)
+
+                        if timeline_response.data:
+                            timeline_tweet_id = timeline_response.data['id']
+                            logger.info(f"Successfully posted to timeline (ID: {timeline_tweet_id})")
+                            results.append({
+                                "id": timeline_tweet_id,
+                                "text": text,
+                                "location": "timeline",
+                                "data": timeline_response.data
+                            })
+
+                    # Return the first successful post (community post)
+                    if results:
+                        return results[0]
+
                 else:
-                    logger.warning("Received empty response from Twitter API")
-                    return None
+                    # No community - just post to timeline normally
+                    timeline_params = {'text': text}
+                    response = self.client.create_tweet(**timeline_params)
+
+                    if response.data:
+                        tweet_id = response.data['id']
+                        logger.info(f"Successfully posted tweet (ID: {tweet_id})")
+                        return {
+                            "id": tweet_id,
+                            "text": text,
+                            "data": response.data
+                        }
+                    else:
+                        logger.warning("Received empty response from Twitter API")
+                        return None
 
             except Forbidden as e:
                 logger.error(f"Forbidden error (duplicate or policy violation): {e}")
