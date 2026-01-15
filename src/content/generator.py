@@ -118,7 +118,7 @@ class ContentGenerator:
         self,
         content_type: Optional[ContentType] = None,
         custom_prompt: Optional[str] = None,
-        max_attempts: int = 3,
+        max_attempts: int = 10,
         use_live_data: bool = True
     ) -> Optional[str]:
         """
