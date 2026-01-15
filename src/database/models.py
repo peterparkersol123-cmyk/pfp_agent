@@ -44,3 +44,31 @@ class Setting:
     key: str = ""
     value: str = ""
     updated_at: Optional[datetime] = None
+
+
+@dataclass
+class EngagementMetric:
+    """Represents detailed engagement metrics for a tweet."""
+    id: Optional[int] = None
+    tweet_id: str = ""
+    likes: int = 0
+    retweets: int = 0
+    replies: int = 0
+    impressions: int = 0
+    engagement_score: float = 0.0  # Calculated score
+    measured_at: Optional[datetime] = None
+    created_at: Optional[datetime] = None
+
+
+@dataclass
+class Reply:
+    """Represents a reply posted by the bot."""
+    id: Optional[int] = None
+    original_tweet_id: str = ""  # Bot's tweet that was replied to
+    reply_to_tweet_id: str = ""  # The comment we're replying to
+    reply_tweet_id: Optional[str] = None  # Our reply's tweet ID
+    reply_text: str = ""
+    author_username: str = ""  # Who we replied to
+    created_at: Optional[datetime] = None
+    likes: int = 0
+    success: bool = False
