@@ -7,6 +7,7 @@ Posts tweets every N hours and replies to comments.
 import os
 import sys
 import time
+import threading
 from pathlib import Path
 from dotenv import load_dotenv
 
@@ -25,6 +26,41 @@ setup_logger()
 logger = get_logger(__name__)
 
 
+def mention_monitoring_loop(mention_handler, check_interval_minutes=5, stop_event=None):
+    """
+    Continuously monitor and reply to mentions in a separate thread.
+
+    Args:
+        mention_handler: MentionHandler instance
+        check_interval_minutes: How often to check for mentions (default 5 minutes)
+        stop_event: Threading event to signal when to stop
+    """
+    logger.info(f"Started mention monitoring thread (checking every {check_interval_minutes} minutes)")
+
+    while not (stop_event and stop_event.is_set()):
+        try:
+            logger.debug("Mention monitor: Checking for new mentions...")
+            mentions_replied = mention_handler.handle_mentions(look_back_minutes=check_interval_minutes + 2)
+
+            if mentions_replied > 0:
+                logger.info(f"Mention monitor: Replied to {mentions_replied} mentions")
+            else:
+                logger.debug("Mention monitor: No new mentions to reply to")
+
+            # Wait before next check
+            for _ in range(check_interval_minutes * 60):
+                if stop_event and stop_event.is_set():
+                    break
+                time.sleep(1)
+
+        except Exception as e:
+            logger.error(f"Error in mention monitoring loop: {e}", exc_info=True)
+            # Wait a bit before retrying
+            time.sleep(60)
+
+    logger.info("Mention monitoring thread stopped")
+
+
 def main():
     """Run the production bot."""
 
@@ -33,6 +69,7 @@ def main():
     post_interval_seconds = post_interval_minutes * 60
     enable_replies = os.getenv('ENABLE_REPLY_SYSTEM', 'True').lower() == 'true'
     max_replies_per_tweet = int(os.getenv('MAX_REPLIES_PER_TWEET', '2'))
+    mention_check_interval = int(os.getenv('MENTION_CHECK_INTERVAL_MINUTES', '5'))
 
     # Get monitored accounts (comma-separated usernames)
     monitored_accounts_str = os.getenv('MONITORED_ACCOUNTS', '')
@@ -47,6 +84,7 @@ def main():
     print(f"  Post Interval: {post_interval_minutes} minutes ({post_interval_minutes/60:.1f} hours)")
     print(f"  Reply System: {'Enabled' if enable_replies else 'Disabled'}")
     print(f"  Max Replies Per Tweet: {max_replies_per_tweet}")
+    print(f"  Mention Monitoring: {'Async (every ' + str(mention_check_interval) + ' min)' if enable_replies else 'Disabled'}")
     print(f"  Monitored Accounts: {len(monitored_accounts)} accounts")
     if monitored_accounts:
         for acc in monitored_accounts:
@@ -67,6 +105,19 @@ def main():
 
         logger.info("Bot started successfully")
 
+        # Start async mention monitoring thread
+        stop_event = threading.Event()
+        mention_thread = None
+        if mention_handler:
+            mention_thread = threading.Thread(
+                target=mention_monitoring_loop,
+                args=(mention_handler, mention_check_interval, stop_event),
+                daemon=True,
+                name="MentionMonitor"
+            )
+            mention_thread.start()
+            logger.info("Started async mention monitoring thread")
+
         tweet_count = 0
         recent_tweets = []  # Store recent tweet IDs for reply checking
 
@@ -79,7 +130,7 @@ def main():
 
                 # Step 0: Check monitored accounts and reply to their tweets
                 if account_monitor:
-                    print("[0/6] Checking monitored accounts for new tweets...")
+                    print("[0/5] Checking monitored accounts for new tweets...")
                     replies_to_accounts = account_monitor.check_and_reply_to_accounts(look_back_minutes=post_interval_minutes + 30)
                     if replies_to_accounts > 0:
                         print(f"  ✓ Posted {replies_to_accounts} replies to monitored accounts")
@@ -87,19 +138,11 @@ def main():
                         print(f"  No new tweets from monitored accounts")
                     print()
 
-                # Step 0.5: Check for mentions and reply
-                if mention_handler:
-                    print("[0.5/6] Checking for mentions...")
-                    mentions_replied = mention_handler.handle_mentions(look_back_minutes=post_interval_minutes + 30)
-                    if mentions_replied > 0:
-                        print(f"  ✓ Replied to {mentions_replied} mentions")
-                    else:
-                        print(f"  No new mentions to reply to")
-                    print()
+                # Note: Mention monitoring now runs asynchronously in separate thread
 
                 # Step 1: Check for replies on recent tweets
                 if enable_replies and reply_handler and recent_tweets:
-                    print("[1/6] Checking for replies on recent tweets...")
+                    print("[1/5] Checking for replies on recent tweets...")
                     for tweet_data in recent_tweets[-3:]:  # Check last 3 tweets
                         tweet_id = tweet_data['id']
                         tweet_text = tweet_data['text']
@@ -122,7 +165,7 @@ def main():
 
                 # Step 2: Update engagement metrics
                 if recent_tweets:
-                    print("[2/6] Updating engagement metrics...")
+                    print("[2/5] Updating engagement metrics...")
                     for tweet_data in recent_tweets[-5:]:  # Track last 5
                         metrics = engagement_tracker.update_metrics(tweet_data['id'])
                         if metrics:
@@ -138,7 +181,7 @@ def main():
                     print()
 
                 # Step 3: Generate new tweet (with style learning from top tweets)
-                print("[3/6] Generating new tweet...")
+                print("[3/5] Generating new tweet...")
 
                 # Check if we have enough data for style learning
                 has_style_data = len(engagement_tracker.tracked_tweets) >= 2
@@ -160,7 +203,7 @@ def main():
                 print(f"  Length: {len(tweet)} chars")
 
                 # Step 4: Post tweet
-                print("\n[4/6] Posting to X...")
+                print("\n[4/5] Posting to X...")
                 result = twitter.post_tweet(tweet)
 
                 if result:
@@ -215,6 +258,14 @@ def main():
         logger.error(f"Fatal error: {e}", exc_info=True)
         print(f"\nFatal error: {e}")
         return 1
+
+    finally:
+        # Stop mention monitoring thread
+        if mention_thread and mention_thread.is_alive():
+            logger.info("Stopping mention monitoring thread...")
+            stop_event.set()
+            mention_thread.join(timeout=5)
+            logger.info("Mention monitoring thread stopped")
 
     print()
     print("="*70)
