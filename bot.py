@@ -105,9 +105,17 @@ def main():
                             print(f"    {i}. Score {tweet['score']:.0f}: {tweet['text'][:60]}...")
                     print()
 
-                # Step 3: Generate new tweet
+                # Step 3: Generate new tweet (with style learning from top tweets)
                 print("[3/4] Generating new tweet...")
-                tweet = generator.generate_tweet(use_live_data=True)
+
+                # Check if we have enough data for style learning
+                has_style_data = len(engagement_tracker.tracked_tweets) >= 2
+                if has_style_data:
+                    print("  ℹ Style learning: Active (learning from top tweets)")
+                else:
+                    print("  ℹ Style learning: Not enough data yet (need 2+ tweets)")
+
+                tweet = generator.generate_tweet(use_live_data=True, engagement_tracker=engagement_tracker)
 
                 if not tweet:
                     logger.error("Failed to generate tweet")

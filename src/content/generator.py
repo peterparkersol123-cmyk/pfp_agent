@@ -119,7 +119,8 @@ class ContentGenerator:
         content_type: Optional[ContentType] = None,
         custom_prompt: Optional[str] = None,
         max_attempts: int = 10,
-        use_live_data: bool = True
+        use_live_data: bool = True,
+        engagement_tracker=None
     ) -> Optional[str]:
         """
         Generate a single tweet with optional live ecosystem data.
@@ -129,6 +130,7 @@ class ContentGenerator:
             custom_prompt: Custom prompt to use instead of templates
             max_attempts: Maximum attempts to generate valid content
             use_live_data: Whether to include live Pump.fun data in context
+            engagement_tracker: Optional engagement tracker for style learning
 
         Returns:
             Generated tweet text or None if failed
@@ -150,6 +152,12 @@ class ContentGenerator:
                     if use_live_data and self._should_use_live_data(template.content_type):
                         ecosystem_context = self._build_ecosystem_context()
                         user_prompt = f"{user_prompt}\n\n{ecosystem_context}\n\nUse this real-time data naturally in your tweet if relevant, but stay in character. CRITICAL: Your tweet MUST be under 260 characters total. Keep it SHORT - 1-2 lines max (under 100 characters preferred). Complete your thought - no trailing off mid-sentence."
+
+                    # Add style learning from top-performing tweets
+                    if engagement_tracker:
+                        style_guidance = self._get_style_guidance(engagement_tracker)
+                        if style_guidance:
+                            user_prompt = f"{user_prompt}\n\n{style_guidance}"
 
                 logger.debug(f"Using content type: {template.content_type.value if not custom_prompt else 'custom'}")
 
@@ -378,6 +386,51 @@ Make it Pepe-style: cheeky, smart, observant. Comment on the token naturally."""
             ContentType.SUPERCYCLE_VISION,  # NEW: Future predictions need current data as baseline
         ]
         return content_type in live_data_types
+
+    def _get_style_guidance(self, engagement_tracker) -> Optional[str]:
+        """
+        Get style guidance from top-performing tweets.
+
+        Args:
+            engagement_tracker: EngagementTracker instance with tweet data
+
+        Returns:
+            Formatted style guidance string or None
+        """
+        try:
+            # Get top 3 performing tweets
+            top_tweets = engagement_tracker.get_top_performing_tweets(limit=3)
+
+            if not top_tweets or len(top_tweets) < 2:
+                return None
+
+            # Build style guidance
+            guidance_parts = ["STYLE LEARNING - Your recent high-performing tweets:"]
+
+            for i, tweet_data in enumerate(top_tweets, 1):
+                score = tweet_data['score']
+                text = tweet_data['text']
+                metrics = tweet_data['metrics']
+                likes = metrics['likes']
+                retweets = metrics['retweets']
+                replies = metrics['replies']
+
+                guidance_parts.append(
+                    f"{i}. (Score: {score:.0f}, {likes}❤️ {retweets}🔄 {replies}💬) \"{text}\""
+                )
+
+            guidance_parts.append(
+                "\nUse similar energy, topics, and style that resonate with your audience. "
+                "Learn from what works - these tweets got the most engagement."
+            )
+
+            guidance = "\n".join(guidance_parts)
+            logger.info("Added style guidance from top-performing tweets")
+            return guidance
+
+        except Exception as e:
+            logger.error(f"Error getting style guidance: {e}")
+            return None
 
     def _strip_emojis(self, content: str) -> str:
         """
