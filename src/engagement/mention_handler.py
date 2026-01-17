@@ -3,6 +3,8 @@ Handle mentions of the bot and reply contextually.
 """
 
 import time
+import json
+from pathlib import Path
 from typing import List, Dict, Optional, Set
 from datetime import datetime, timezone, timedelta
 from src.api.twitter_client import TwitterClient
@@ -34,6 +36,10 @@ class MentionHandler:
         self.max_replies_per_hour = max_replies_per_hour
         self.replied_mention_ids: Set[str] = set()  # Track what we've replied to
         self.last_check_time = datetime.now(timezone.utc)
+
+        # Knowledge base for learning from tweets
+        self.knowledge_file = Path("data/learned_context.jsonl")
+        self.knowledge_file.parent.mkdir(exist_ok=True)
 
         logger.info(f"Initialized MentionHandler (max {max_replies_per_hour} replies/hour)")
 
@@ -93,6 +99,14 @@ class MentionHandler:
                 if author.username.lower() == bot_username.lower():
                     continue
 
+                # Check if this is a reply to another tweet (referenced_tweets)
+                referenced_tweet_id = None
+                if hasattr(mention, 'referenced_tweets') and mention.referenced_tweets:
+                    for ref in mention.referenced_tweets:
+                        if ref.type == 'replied_to':
+                            referenced_tweet_id = ref.id
+                            break
+
                 mention_list.append({
                     'id': mention.id,
                     'text': mention.text,
@@ -102,7 +116,8 @@ class MentionHandler:
                     'created_at': mention.created_at,
                     'conversation_id': mention.conversation_id,
                     'likes': mention.public_metrics.get('like_count', 0),
-                    'retweets': mention.public_metrics.get('retweet_count', 0)
+                    'retweets': mention.public_metrics.get('retweet_count', 0),
+                    'referenced_tweet_id': referenced_tweet_id  # The original tweet they're replying to
                 })
 
             logger.info(f"Found {len(mention_list)} new mentions")
@@ -159,9 +174,69 @@ class MentionHandler:
         logger.info(f"Selected {len(selected)}/{len(mentions)} mentions to reply to")
         return selected
 
+    def get_original_tweet_context(self, tweet_id: str) -> Optional[str]:
+        """
+        Fetch the original tweet that someone mentioned the bot in.
+        This allows the bot to learn from the broader conversation.
+
+        Args:
+            tweet_id: ID of the original tweet
+
+        Returns:
+            Tweet text or None
+        """
+        try:
+            tweet = self.twitter_client.client.get_tweet(
+                id=tweet_id,
+                tweet_fields=['text', 'author_id', 'public_metrics'],
+                expansions=['author_id'],
+                user_fields=['username'],
+                user_auth=True
+            )
+
+            if tweet.data:
+                author_username = "unknown"
+                if tweet.includes and 'users' in tweet.includes and len(tweet.includes['users']) > 0:
+                    author_username = tweet.includes['users'][0].username
+
+                original_text = tweet.data.text
+                logger.info(f"Fetched original tweet from @{author_username}: {original_text[:50]}...")
+                return f"@{author_username}: {original_text}"
+
+        except Exception as e:
+            logger.error(f"Error fetching original tweet {tweet_id}: {e}")
+
+        return None
+
+    def save_learned_context(self, original_tweet: str, mention_text: str, category: str = "general"):
+        """
+        Save interesting tweets/context to knowledge base for future reference.
+
+        Args:
+            original_tweet: The original tweet text
+            mention_text: The mention text
+            category: Category of learning (general, market, culture, etc.)
+        """
+        try:
+            entry = {
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "category": category,
+                "original_tweet": original_tweet,
+                "mention": mention_text,
+            }
+
+            with open(self.knowledge_file, 'a') as f:
+                f.write(json.dumps(entry) + '\n')
+
+            logger.debug(f"Saved learned context: {original_tweet[:50]}...")
+
+        except Exception as e:
+            logger.error(f"Error saving learned context: {e}")
+
     def generate_mention_reply(self, mention: Dict) -> Optional[str]:
         """
         Generate a contextual reply to a mention.
+        If the mention is a reply to another tweet, fetch that original tweet for context.
 
         Args:
             mention: Mention dict with text and metadata
@@ -170,11 +245,46 @@ class MentionHandler:
             Generated reply text or None
         """
         try:
-            # Remove the @mention of bot from the text to get the actual content
             mention_text = mention['text']
             author = mention['author_username']
+            referenced_tweet_id = mention.get('referenced_tweet_id')
 
-            prompt = f"""Someone mentioned you on Twitter. Generate a helpful, engaging reply.
+            # Try to get the original tweet they're replying to
+            original_tweet_context = None
+            if referenced_tweet_id:
+                original_tweet_context = self.get_original_tweet_context(referenced_tweet_id)
+
+            # Save to knowledge base if we found interesting context
+            if original_tweet_context:
+                self.save_learned_context(
+                    original_tweet=original_tweet_context,
+                    mention_text=mention_text,
+                    category="conversation"
+                )
+
+            # Build the prompt with original tweet context if available
+            if original_tweet_context:
+                prompt = f"""Someone mentioned you in a reply to another tweet. Read BOTH tweets to understand the full context and respond appropriately.
+
+ORIGINAL TWEET (they're replying to this):
+"{original_tweet_context}"
+
+THEIR MENTION (tagging you):
+@{author}: "{mention_text}"
+
+Generate a short reply (under 280 chars) that shows you READ and UNDERSTOOD the original tweet. Stay in character as Pump.fun Pepe:
+- All lowercase (except tickers like $PFP, $SOL)
+- No emojis ever
+- Reference the original tweet if relevant - show you absorbed the context
+- Be helpful, insightful, or entertaining
+- Keep it SHORT - 1-2 lines max
+- Add value to the conversation with your knowledge
+- Learn from what you see in the original tweet
+- Be authentic and conversational, not generic
+
+Reply:"""
+            else:
+                prompt = f"""Someone mentioned you on Twitter. Generate a helpful, engaging reply.
 
 THEIR MENTION:
 @{author}: "{mention_text}"

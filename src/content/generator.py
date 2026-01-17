@@ -4,6 +4,8 @@ Content generator that uses Claude API to create tweets with real-time ecosystem
 
 import random
 import re
+import json
+from pathlib import Path
 from datetime import datetime, timezone
 from typing import Optional, List, Dict, Any
 from src.api.claude_client import ClaudeClient
@@ -48,6 +50,9 @@ class ContentGenerator:
         # Track last 10 tweets to avoid repetitive content
         self.recent_tweets: List[str] = []
         self.recent_tweets_limit = 10
+
+        # Knowledge base for learned context
+        self.knowledge_file = Path("data/learned_context.jsonl")
 
         logger.info("Initialized ContentGenerator with Pump.fun data integration")
 
@@ -114,6 +119,50 @@ class ContentGenerator:
             logger.error(f"Error building ecosystem context: {e}")
             return "Current Pump.fun ecosystem: live data unavailable, use general knowledge"
 
+    def _get_learned_context(self, limit: int = 5) -> Optional[str]:
+        """
+        Get recent learned context from mentions/conversations.
+
+        Args:
+            limit: Number of recent learnings to include
+
+        Returns:
+            Formatted learned context string or None
+        """
+        try:
+            if not self.knowledge_file.exists():
+                return None
+
+            # Read last N lines from the knowledge file
+            learnings = []
+            with open(self.knowledge_file, 'r') as f:
+                lines = f.readlines()
+                for line in lines[-limit:]:
+                    try:
+                        entry = json.loads(line.strip())
+                        learnings.append(entry)
+                    except:
+                        continue
+
+            if not learnings:
+                return None
+
+            context_parts = ["Recent conversations you've seen (learn from these):"]
+            for learning in learnings:
+                original = learning.get('original_tweet', '')
+                if original:
+                    # Truncate if too long
+                    if len(original) > 150:
+                        original = original[:150] + "..."
+                    context_parts.append(f"- {original}")
+
+            logger.debug(f"Loaded {len(learnings)} recent learnings")
+            return "\n".join(context_parts)
+
+        except Exception as e:
+            logger.error(f"Error loading learned context: {e}")
+            return None
+
     def generate_tweet(
         self,
         content_type: Optional[ContentType] = None,
@@ -158,6 +207,11 @@ class ContentGenerator:
                         style_guidance = self._get_style_guidance(engagement_tracker)
                         if style_guidance:
                             user_prompt = f"{user_prompt}\n\n{style_guidance}"
+
+                    # Add learned context from conversations
+                    learned_context = self._get_learned_context(limit=3)
+                    if learned_context:
+                        user_prompt = f"{user_prompt}\n\n{learned_context}"
 
                 logger.debug(f"Using content type: {template.content_type.value if not custom_prompt else 'custom'}")
 
