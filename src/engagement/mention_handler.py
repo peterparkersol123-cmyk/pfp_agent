@@ -211,7 +211,7 @@ class MentionHandler:
     def is_worth_learning(self, tweet_text: str) -> bool:
         """
         Determine if a tweet is worth saving to knowledge base.
-        Filter out spam, low-value content.
+        Uses advanced filters inspired by X search operators and Pump.fun intelligence.
 
         Args:
             tweet_text: Tweet text to evaluate
@@ -221,34 +221,78 @@ class MentionHandler:
         """
         text_lower = tweet_text.lower()
 
-        # Must be substantial
-        if len(tweet_text) < 30:
+        # Must be substantial (increased from 30 to 50 for quality)
+        if len(tweet_text) < 50:
             return False
 
-        # Skip pure spam/promotional
-        spam_indicators = ['dm me', 'click here', 'buy now', 'check out my', 'follow back']
+        # EXPANDED spam/scam indicators (Grok-inspired)
+        spam_indicators = [
+            'dm me', 'click here', 'buy now', 'check out my', 'follow back',
+            'airdrop now', 'free mint', 'join presale', 'urgent buy',
+            'guaranteed profit', 'get rich quick', '100x guaranteed',
+            'limited time', 'act now', 'dont miss', 'last chance'
+        ]
         if any(indicator in text_lower for indicator in spam_indicators):
             return False
 
-        # Prefer tweets with relevant content
-        valuable_keywords = [
-            # Pump.fun related
-            'pump.fun', 'pumpfun', 'pump', 'bonding', 'graduate', 'raydium',
-            # Market/trading
-            'volume', 'liquidity', 'market cap', 'mcap', 'price', 'buy', 'sell',
-            'bullish', 'bearish', 'moon', 'dump', 'rug',
-            # Token related
-            'token', 'coin', 'launch', 'mint', '$', 'ticker',
-            # Narratives
-            'ai', 'agent', 'meme', 'narrative', 'meta', 'trend',
-            # Culture
-            'degen', 'wagmi', 'ngmi', 'gm', 'anon', 'fren',
+        # HIGH-VALUE SIGNALS - Pump.fun specific events
+        high_value_signals = [
+            # Pump.fun milestones
+            'dev burn', 'curve complete', 'king of the hill', 'fair launch',
+            'bonding curve', 'graduated', 'raydium pool',
+            # Safety indicators
+            'mint revoked', 'freeze disabled', 'dev holds', 'top holders',
+            'liquidity locked', 'no snipers',
+            # On-chain metrics
+            'mcap', 'market cap', 'volume', 'liquidity', 'holders',
+            'whale buy', 'whale activity', 'smart money',
+            # Narratives & metas
+            'ai agent', 'agent economy', 'depin', 'solana summer',
+            'narrative shift', 'meta changing', 'trend rotating',
         ]
 
-        # Check if tweet contains valuable keywords
-        has_value = any(keyword in text_lower for keyword in valuable_keywords)
+        # VALUABLE content keywords (expanded)
+        valuable_keywords = [
+            # Pump.fun ecosystem
+            'pump.fun', 'pumpfun', 'pump', 'bonding', 'graduate', 'raydium',
+            'pumpswap', 'curve', 'launch terminal',
+            # Market/trading intelligence
+            'volume spike', 'liquidity', 'price action', 'breakout',
+            'accumulation', 'distribution', 'whale', 'smart money',
+            # Token analysis
+            'token', 'coin', 'launch', 'mint', '$', 'deployer',
+            'dev wallet', 'holder distribution',
+            # Narratives (expanded)
+            'ai', 'agent', 'meme', 'narrative', 'meta', 'trend',
+            'rotation', 'catalyst', 'alpha',
+            # Culture & sentiment
+            'degen', 'wagmi', 'ngmi', 'gm', 'anon', 'fren',
+            'bullish', 'bearish', 'fomo', 'paper hands',
+            # Safety/risk
+            'rug', 'scam', 'safe', 'legit', 'sus', 'red flag',
+        ]
 
-        return has_value
+        # SCORING SYSTEM (instead of binary)
+        score = 0
+
+        # High-value signals are VERY valuable (weight: 3)
+        if any(signal in text_lower for signal in high_value_signals):
+            score += 3
+
+        # Valuable keywords (weight: 1)
+        keyword_matches = sum(1 for keyword in valuable_keywords if keyword in text_lower)
+        score += keyword_matches
+
+        # Bonus for numbers/percentages (indicates analysis)
+        if any(char.isdigit() for char in tweet_text) and '%' in tweet_text:
+            score += 2
+
+        # Bonus for ticker symbols (indicates token discussion)
+        if '$' in tweet_text and any(char.isupper() for char in tweet_text):
+            score += 1
+
+        # Need minimum score of 3 to be worth learning
+        return score >= 3
 
     def save_learned_context(self, original_tweet: str, mention_text: str, category: str = "general"):
         """

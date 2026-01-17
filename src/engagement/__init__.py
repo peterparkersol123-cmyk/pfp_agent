@@ -6,5 +6,12 @@ from src.engagement.tracker import EngagementTracker
 from src.engagement.reply_handler import ReplyHandler
 from src.engagement.account_monitor import AccountMonitor
 from src.engagement.mention_handler import MentionHandler
+from src.engagement.twitter_intelligence import TwitterIntelligence
 
-__all__ = ['EngagementTracker', 'ReplyHandler', 'AccountMonitor', 'MentionHandler']
+__all__ = [
+    'EngagementTracker',
+    'ReplyHandler',
+    'AccountMonitor',
+    'MentionHandler',
+    'TwitterIntelligence'
+]
