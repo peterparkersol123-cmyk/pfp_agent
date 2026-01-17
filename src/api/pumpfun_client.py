@@ -1,12 +1,13 @@
 """
 Pump.fun API client for fetching real-time ecosystem data.
 Enables Pepe to talk about actual trending coins, rugs, and live data.
-Uses DexScreener API as primary source (more reliable than Pump.fun direct API).
+Uses Helius RPC to fetch actual Pump.fun tokens + DexScreener for price data.
 """
 
 import requests
 import time
 import random
+import os
 from typing import Optional, List, Dict, Any
 from datetime import datetime, timedelta
 from src.config.settings import settings
@@ -17,15 +18,19 @@ logger = get_logger(__name__)
 
 
 class PumpFunClient:
-    """Client for fetching Pump.fun ecosystem data via DexScreener."""
+    """Client for fetching Pump.fun ecosystem data via Helius RPC + DexScreener."""
 
     def __init__(self):
         """Initialize Pump.fun data client."""
-        # DexScreener is more reliable for Solana/Pump.fun data
-        self.dexscreener_url = "https://api.dexscreener.com/latest/dex"
+        # Helius RPC for fetching actual Pump.fun tokens
+        helius_api_key = os.getenv('HELIUS_API_KEY', '')
+        self.helius_rpc_url = f"https://mainnet.helius-rpc.com/?api-key={helius_api_key}" if helius_api_key else None
 
-        # Search for Raydium pairs (where Pump.fun tokens graduate to)
-        self.solana_dex = "raydium"
+        # Pump.fun program ID
+        self.pump_program_id = "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P"
+
+        # DexScreener for price data
+        self.dexscreener_url = "https://api.dexscreener.com/latest/dex"
 
         # $PFP token pair address
         self.pfp_pair_address = "GdfCd7L8X1GiUdFZ1WthNHEB352K3Ni37rswtjgmGLPt"
@@ -33,21 +38,119 @@ class PumpFunClient:
         self.session = requests.Session()
         self.session.headers.update({
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-            'Accept': 'application/json'
+            'Accept': 'application/json',
+            'Content-Type': 'application/json'
         })
 
         # Cache for reducing API calls
         self.cache = {}
         self.cache_ttl = 300  # 5 minutes
 
-        logger.info("Initialized PumpFunClient (using DexScreener)")
+        if self.helius_rpc_url:
+            logger.info("Initialized PumpFunClient (using Helius RPC + DexScreener)")
+        else:
+            logger.warning("Initialized PumpFunClient without Helius API key - using DexScreener only")
+
+    def get_pump_tokens_from_helius(self, limit: int = 50) -> List[str]:
+        """
+        Fetch actual Pump.fun token mints using Helius RPC.
+
+        Args:
+            limit: Max number of token addresses to fetch
+
+        Returns:
+            List of token mint addresses
+        """
+        if not self.helius_rpc_url:
+            logger.debug("Helius RPC not configured, skipping Pump.fun token fetch")
+            return []
+
+        try:
+            # Use getProgramAccounts to fetch tokens from Pump.fun program
+            payload = {
+                "jsonrpc": "2.0",
+                "id": "pump-tokens",
+                "method": "getProgramAccounts",
+                "params": [
+                    self.pump_program_id,
+                    {
+                        "encoding": "base64",
+                        "filters": [
+                            {
+                                "dataSize": 1000  # Pump.fun bonding curve accounts are ~1000 bytes
+                            }
+                        ]
+                    }
+                ]
+            }
+
+            response = self.session.post(self.helius_rpc_url, json=payload, timeout=15)
+
+            if response.status_code == 200:
+                data = response.json()
+                result = data.get('result', [])
+
+                # Extract token addresses (pubkeys)
+                token_addresses = [account['pubkey'] for account in result[:limit]]
+                logger.info(f"Fetched {len(token_addresses)} Pump.fun token addresses from Helius")
+                return token_addresses
+            else:
+                logger.warning(f"Helius RPC returned {response.status_code}")
+                return []
+
+        except Exception as e:
+            logger.error(f"Error fetching Pump.fun tokens from Helius: {e}")
+            return []
+
+    def enrich_tokens_with_dexscreener(self, token_addresses: List[str]) -> List[Dict[str, Any]]:
+        """
+        Enrich token addresses with price/volume data from DexScreener.
+
+        Args:
+            token_addresses: List of token mint addresses
+
+        Returns:
+            List of enriched token data
+        """
+        enriched_tokens = []
+
+        for address in token_addresses[:20]:  # Limit to avoid rate limits
+            try:
+                url = f"{self.dexscreener_url}/tokens/{address}"
+                response = self.session.get(url, timeout=5)
+
+                if response.status_code == 200:
+                    data = response.json()
+                    pairs = data.get('pairs', [])
+
+                    if pairs:
+                        # Use first pair (usually highest liquidity)
+                        pair = pairs[0]
+                        token = {
+                            'name': pair.get('baseToken', {}).get('name', 'Unknown'),
+                            'symbol': pair.get('baseToken', {}).get('symbol', '???'),
+                            'price_usd': float(pair.get('priceUsd', 0) or 0),
+                            'volume_24h': float(pair.get('volume', {}).get('h24', 0) or 0),
+                            'price_change_24h': float(pair.get('priceChange', {}).get('h24', 0) or 0),
+                            'liquidity': float(pair.get('liquidity', {}).get('usd', 0) or 0),
+                            'address': address,
+                        }
+                        enriched_tokens.append(token)
+
+                time.sleep(0.2)  # Rate limit protection
+
+            except Exception as e:
+                logger.debug(f"Error enriching token {address[:8]}: {e}")
+                continue
+
+        return enriched_tokens
 
     def get_trending_tokens(self, limit: int = 10) -> List[Dict[str, Any]]:
         """
-        Get trending tokens (using Solana/Raydium as proxy for Pump.fun ecosystem).
+        Get trending Pump.fun tokens using Helius + DexScreener.
 
         Args:
-            limit: Number of trending tokens to fetch
+            limit: Number of trending tokens to return
 
         Returns:
             List of trending token data
@@ -58,10 +161,29 @@ class PumpFunClient:
             return cached
 
         try:
-            logger.debug(f"Fetching trending Solana tokens via DexScreener")
+            # Try Helius first for actual Pump.fun tokens
+            if self.helius_rpc_url:
+                logger.debug("Fetching trending Pump.fun tokens via Helius + DexScreener")
 
-            # Get trending pairs on Solana (many Pump.fun tokens graduate here)
-            url = f"{self.dexscreener_url}/search/?q=SOL"
+                # Get Pump.fun token addresses
+                pump_tokens = self.get_pump_tokens_from_helius(limit=50)
+
+                if pump_tokens:
+                    # Enrich with price data
+                    enriched = self.enrich_tokens_with_dexscreener(pump_tokens)
+
+                    if enriched:
+                        # Sort by volume
+                        enriched.sort(key=lambda x: x.get('volume_24h', 0), reverse=True)
+
+                        tokens = enriched[:limit]
+                        self._set_cache(cache_key, tokens)
+                        logger.info(f"Fetched {len(tokens)} trending Pump.fun tokens")
+                        return tokens
+
+            # Fallback to DexScreener search for Pump.fun pairs
+            logger.debug("Falling back to DexScreener search")
+            url = f"{self.dexscreener_url}/search/?q=pump"
             response = self.session.get(url, timeout=10)
 
             if response.status_code == 200:
@@ -72,7 +194,7 @@ class PumpFunClient:
                 solana_pairs = [
                     p for p in pairs
                     if p.get('chainId') == 'solana' and
-                    p.get('volume', {}).get('h24', 0) > 1000
+                    float(p.get('volume', {}).get('h24', 0) or 0) > 500
                 ]
 
                 # Sort by 24h volume
@@ -87,20 +209,19 @@ class PumpFunClient:
                     token = {
                         'name': pair.get('baseToken', {}).get('name', 'Unknown'),
                         'symbol': pair.get('baseToken', {}).get('symbol', '???'),
-                        'price_usd': pair.get('priceUsd', 0),
-                        'volume_24h': pair.get('volume', {}).get('h24', 0),
-                        'price_change_24h': pair.get('priceChange', {}).get('h24', 0),
-                        'liquidity': pair.get('liquidity', {}).get('usd', 0),
+                        'price_usd': float(pair.get('priceUsd', 0) or 0),
+                        'volume_24h': float(pair.get('volume', {}).get('h24', 0) or 0),
+                        'price_change_24h': float(pair.get('priceChange', {}).get('h24', 0) or 0),
+                        'liquidity': float(pair.get('liquidity', {}).get('usd', 0) or 0),
                         'address': pair.get('baseToken', {}).get('address', ''),
                     }
                     tokens.append(token)
 
                 self._set_cache(cache_key, tokens)
-                logger.info(f"Fetched {len(tokens)} trending Solana tokens")
+                logger.info(f"Fetched {len(tokens)} tokens from DexScreener")
                 return tokens
-            else:
-                logger.warning(f"DexScreener API returned {response.status_code}")
-                return self._get_fallback_trending(limit)
+
+            return self._get_fallback_trending(limit)
 
         except Exception as e:
             logger.error(f"Error fetching trending tokens: {e}")
