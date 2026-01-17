@@ -119,25 +119,89 @@ class ContentGenerator:
             logger.error(f"Error building ecosystem context: {e}")
             return "Current Pump.fun ecosystem: live data unavailable, use general knowledge"
 
+    def _extract_insights_from_learnings(self, learnings: List[Dict]) -> Optional[str]:
+        """
+        Use Claude to extract actionable insights from learned conversations.
+        This makes learning ACTIVE instead of passive.
+
+        Args:
+            learnings: List of learned conversation entries
+
+        Returns:
+            Extracted insights or None
+        """
+        try:
+            if not learnings:
+                return None
+
+            # Format learnings for Claude
+            conversations = []
+            for i, learning in enumerate(learnings[-10:], 1):  # Last 10 max
+                original = learning.get('original_tweet', '')
+                if original and len(original) > 10:
+                    conversations.append(f"{i}. {original}")
+
+            if not conversations:
+                return None
+
+            conversations_text = "\n".join(conversations)
+
+            # Ask Claude to extract insights
+            prompt = f"""You've been exposed to these recent tweets through conversations:
+
+{conversations_text}
+
+Extract 2-3 KEY INSIGHTS or LEARNINGS from these tweets that would be valuable for a Pump.fun Pepe character to know. Focus on:
+- New tokens, narratives, or trends mentioned
+- Market sentiment or price action insights
+- Cultural shifts or memes emerging
+- Alpha or knowledge worth remembering
+
+Format as bullet points, very concise (1 line each), in lowercase degen style.
+Example: "- traders rotating into ai agent tokens, narrative heating up"
+
+Insights:"""
+
+            system_prompt = """You extract actionable insights from tweets. Be concise, focus on market-relevant information, trends, narratives, new tokens, or cultural shifts. Write in lowercase degen style."""
+
+            insights = self.claude_client.generate_content(
+                prompt=prompt,
+                system_prompt=system_prompt,
+                max_tokens=150,
+                temperature=0.7
+            )
+
+            if insights:
+                insights = insights.strip()
+                logger.info(f"Extracted insights from {len(conversations)} learnings")
+                return insights
+
+            return None
+
+        except Exception as e:
+            logger.error(f"Error extracting insights: {e}")
+            return None
+
     def _get_learned_context(self, limit: int = 5) -> Optional[str]:
         """
         Get recent learned context from mentions/conversations.
+        Extracts INSIGHTS instead of raw tweets for better learning.
 
         Args:
-            limit: Number of recent learnings to include
+            limit: Number of recent learnings to check
 
         Returns:
-            Formatted learned context string or None
+            Formatted learned insights or None
         """
         try:
             if not self.knowledge_file.exists():
                 return None
 
-            # Read last N lines from the knowledge file
+            # Read recent learnings
             learnings = []
             with open(self.knowledge_file, 'r') as f:
                 lines = f.readlines()
-                for line in lines[-limit:]:
+                for line in lines[-20:]:  # Check last 20
                     try:
                         entry = json.loads(line.strip())
                         learnings.append(entry)
@@ -147,17 +211,15 @@ class ContentGenerator:
             if not learnings:
                 return None
 
-            context_parts = ["Recent conversations you've seen (learn from these):"]
-            for learning in learnings:
-                original = learning.get('original_tweet', '')
-                if original:
-                    # Truncate if too long
-                    if len(original) > 150:
-                        original = original[:150] + "..."
-                    context_parts.append(f"- {original}")
+            # Extract insights using Claude (smart learning)
+            insights = self._extract_insights_from_learnings(learnings)
 
-            logger.debug(f"Loaded {len(learnings)} recent learnings")
-            return "\n".join(context_parts)
+            if insights:
+                formatted = f"RECENT LEARNINGS from community conversations:\n{insights}"
+                logger.debug(f"Loaded insights from {len(learnings)} conversations")
+                return formatted
+
+            return None
 
         except Exception as e:
             logger.error(f"Error loading learned context: {e}")

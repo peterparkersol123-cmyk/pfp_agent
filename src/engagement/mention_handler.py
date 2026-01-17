@@ -208,9 +208,52 @@ class MentionHandler:
 
         return None
 
+    def is_worth_learning(self, tweet_text: str) -> bool:
+        """
+        Determine if a tweet is worth saving to knowledge base.
+        Filter out spam, low-value content.
+
+        Args:
+            tweet_text: Tweet text to evaluate
+
+        Returns:
+            True if worth learning from
+        """
+        text_lower = tweet_text.lower()
+
+        # Must be substantial
+        if len(tweet_text) < 30:
+            return False
+
+        # Skip pure spam/promotional
+        spam_indicators = ['dm me', 'click here', 'buy now', 'check out my', 'follow back']
+        if any(indicator in text_lower for indicator in spam_indicators):
+            return False
+
+        # Prefer tweets with relevant content
+        valuable_keywords = [
+            # Pump.fun related
+            'pump.fun', 'pumpfun', 'pump', 'bonding', 'graduate', 'raydium',
+            # Market/trading
+            'volume', 'liquidity', 'market cap', 'mcap', 'price', 'buy', 'sell',
+            'bullish', 'bearish', 'moon', 'dump', 'rug',
+            # Token related
+            'token', 'coin', 'launch', 'mint', '$', 'ticker',
+            # Narratives
+            'ai', 'agent', 'meme', 'narrative', 'meta', 'trend',
+            # Culture
+            'degen', 'wagmi', 'ngmi', 'gm', 'anon', 'fren',
+        ]
+
+        # Check if tweet contains valuable keywords
+        has_value = any(keyword in text_lower for keyword in valuable_keywords)
+
+        return has_value
+
     def save_learned_context(self, original_tweet: str, mention_text: str, category: str = "general"):
         """
         Save interesting tweets/context to knowledge base for future reference.
+        Only saves if tweet is deemed valuable for learning.
 
         Args:
             original_tweet: The original tweet text
@@ -218,6 +261,11 @@ class MentionHandler:
             category: Category of learning (general, market, culture, etc.)
         """
         try:
+            # Filter: only save valuable content
+            if not self.is_worth_learning(original_tweet):
+                logger.debug(f"Skipping low-value tweet for knowledge base")
+                return
+
             entry = {
                 "timestamp": datetime.now(timezone.utc).isoformat(),
                 "category": category,
@@ -228,7 +276,7 @@ class MentionHandler:
             with open(self.knowledge_file, 'a') as f:
                 f.write(json.dumps(entry) + '\n')
 
-            logger.debug(f"Saved learned context: {original_tweet[:50]}...")
+            logger.info(f"Saved valuable context to knowledge base: {original_tweet[:50]}...")
 
         except Exception as e:
             logger.error(f"Error saving learned context: {e}")
