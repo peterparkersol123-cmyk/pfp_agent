@@ -12,6 +12,7 @@ from src.api.claude_client import ClaudeClient
 from src.api.pumpfun_client import PumpFunClient
 from src.content.templates import PromptTemplates, ContentTemplate, ContentType
 from src.content.validator import ContentValidator
+from src.content.critic import TweetCritic
 from src.utils.logger import get_logger
 from src.utils.helpers import random_choice_weighted
 
@@ -39,6 +40,7 @@ class ContentGenerator:
         self.pumpfun_client = pumpfun_client or PumpFunClient()
         self.validator = ContentValidator()
         self.templates = PromptTemplates()
+        self.critic = TweetCritic(claude_client)
 
         # Track recent content types for variety
         self.recent_topics: List[ContentType] = []
@@ -320,6 +322,14 @@ Insights:"""
                 is_valid, errors = self.validator.validate(content)
 
                 if is_valid:
+                    # Self-critique before accepting
+                    score, feedback = self.critic.critique_tweet(content)
+
+                    if score < 8:
+                        logger.warning(f"Tweet scored {score}/10, regenerating. Feedback: {feedback[:100]}")
+                        continue  # Try again
+
+                    logger.info(f"Tweet approved with score {score}/10")
                     logger.info(f"Successfully generated valid tweet: {content[:50]}...")
                     # Track this topic for variety
                     if not custom_prompt:
