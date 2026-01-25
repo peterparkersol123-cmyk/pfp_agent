@@ -101,7 +101,7 @@ def main():
         engagement_tracker = EngagementTracker(twitter)
         reply_handler = ReplyHandler(twitter, max_replies_per_tweet=max_replies_per_tweet) if enable_replies else None
         account_monitor = AccountMonitor(twitter, target_usernames=monitored_accounts) if monitored_accounts else None
-        mention_handler = MentionHandler(twitter, max_replies_per_hour=4) if enable_replies else None
+        mention_handler = MentionHandler(twitter, max_replies_per_hour=5) if enable_replies else None
 
         logger.info("Bot started successfully")
 
