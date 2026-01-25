@@ -15,6 +15,7 @@ from src.content.validator import ContentValidator
 from src.content.critic import TweetCritic
 from src.utils.logger import get_logger
 from src.utils.helpers import random_choice_weighted
+from src.utils.price_mention_tracker import PriceMentionTracker
 
 logger = get_logger(__name__)
 
@@ -41,6 +42,7 @@ class ContentGenerator:
         self.validator = ContentValidator()
         self.templates = PromptTemplates()
         self.critic = TweetCritic(claude_client)
+        self.price_tracker = PriceMentionTracker()
 
         # Track recent content types for variety
         self.recent_topics: List[ContentType] = []
@@ -264,7 +266,15 @@ Insights:"""
                     # Add live data context for relevant content types
                     if use_live_data and self._should_use_live_data(template.content_type):
                         ecosystem_context = self._build_ecosystem_context()
-                        user_prompt = f"{user_prompt}\n\n{ecosystem_context}\n\nUse this real-time data naturally in your tweet if relevant, but stay in character. CRITICAL: Your tweet MUST be under 260 characters total. Keep it SHORT - 1-2 lines max (under 100 characters preferred). Complete your thought - no trailing off mid-sentence."
+
+                        # Check if price action can be mentioned
+                        can_mention_price = self.price_tracker.can_mention_price()
+                        price_constraint = ""
+                        if not can_mention_price:
+                            hours_remaining = self.price_tracker.get_time_until_next_allowed()
+                            price_constraint = f"\n\nIMPORTANT CONSTRAINT: DO NOT mention $PFP price action, price changes, or specific price numbers in this tweet. You already talked about price recently. Wait {hours_remaining:.1f} hours before mentioning price again. You can still mention $PFP in other contexts (culture, community, narrative, tech), just not price/numbers."
+
+                        user_prompt = f"{user_prompt}\n\n{ecosystem_context}{price_constraint}\n\nUse this real-time data naturally in your tweet if relevant, but stay in character. CRITICAL: Your tweet MUST be under 260 characters total. Keep it SHORT - 1-2 lines max (under 100 characters preferred). Complete your thought - no trailing off mid-sentence."
 
                     # Add style learning from top-performing tweets
                     if engagement_tracker:
@@ -338,6 +348,10 @@ Insights:"""
                     if self._contains_gm(content):
                         self.last_gm_date = datetime.now(timezone.utc).strftime('%Y-%m-%d')
                         logger.info(f"Updated last_gm_date to {self.last_gm_date}")
+                    # Track price mention if content mentions price
+                    if self._contains_price_action(content):
+                        self.price_tracker.record_price_mention()
+                        logger.info("Recorded price action mention")
                     # Track tweet for similarity checking
                     self._track_tweet(content)
                     return content
@@ -598,6 +612,37 @@ Make it Pepe-style: cheeky, smart, observant. Comment on the token naturally."""
         # Match 'gm' as a whole word (not part of other words)
         pattern = r'\bgm\b'
         return bool(re.search(pattern, content, re.IGNORECASE))
+
+    def _contains_price_action(self, content: str) -> bool:
+        """
+        Check if content mentions price action or specific prices.
+
+        Args:
+            content: Content to check
+
+        Returns:
+            True if contains price-related mentions
+        """
+        content_lower = content.lower()
+
+        # Price keywords and patterns
+        price_indicators = [
+            'price', 'mcap', 'market cap', 'volume',
+            '$0.', 'cent', 'dollar', 'usd',
+            'up', 'down', 'pump', 'dump',
+            'moon', 'ath', 'dip', 'breakout',
+            'chart', 'candle', 'support', 'resistance',
+            'buy', 'bought', 'sold', 'bag'
+        ]
+
+        # Check for price indicators along with $PFP mention
+        has_pfp = '$pfp' in content_lower or 'pfp' in content_lower
+        has_price_indicator = any(indicator in content_lower for indicator in price_indicators)
+
+        # Also check for numerical patterns that might be prices
+        has_price_pattern = bool(re.search(r'\$\d+\.?\d*[mkb]?', content_lower))
+
+        return has_pfp and (has_price_indicator or has_price_pattern)
 
     def _is_too_similar(self, new_content: str) -> bool:
         """
