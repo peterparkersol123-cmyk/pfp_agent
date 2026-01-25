@@ -10,6 +10,7 @@ from datetime import datetime, timezone, timedelta
 from src.api.twitter_client import TwitterClient
 from src.api.claude_client import ClaudeClient
 from src.utils.logger import get_logger
+from src.utils.rate_limiter import SharedReplyRateLimiter
 
 logger = get_logger(__name__)
 
@@ -21,7 +22,7 @@ class MentionHandler:
         self,
         twitter_client: Optional[TwitterClient] = None,
         claude_client: Optional[ClaudeClient] = None,
-        max_replies_per_hour: int = 4
+        rate_limiter: Optional[SharedReplyRateLimiter] = None
     ):
         """
         Initialize mention handler.
@@ -29,11 +30,11 @@ class MentionHandler:
         Args:
             twitter_client: Twitter API client
             claude_client: Claude API client
-            max_replies_per_hour: Maximum mentions to reply to per hour
+            rate_limiter: Shared rate limiter for all replies
         """
         self.twitter_client = twitter_client or TwitterClient()
         self.claude_client = claude_client or ClaudeClient()
-        self.max_replies_per_hour = max_replies_per_hour
+        self.rate_limiter = rate_limiter
         self.replied_mention_ids: Set[str] = set()  # Track what we've replied to
         self.last_check_time = datetime.now(timezone.utc)
 
@@ -41,7 +42,7 @@ class MentionHandler:
         self.knowledge_file = Path("data/learned_context.jsonl")
         self.knowledge_file.parent.mkdir(exist_ok=True)
 
-        logger.info(f"Initialized MentionHandler (max {max_replies_per_hour} replies/hour)")
+        logger.info(f"Initialized MentionHandler with shared rate limiter")
 
     def get_recent_mentions(self, since_minutes: int = 120) -> List[Dict]:
         """
@@ -135,10 +136,19 @@ class MentionHandler:
             mentions: List of all mentions
 
         Returns:
-            List of selected mentions to reply to (max self.max_replies_per_hour)
+            List of selected mentions to reply to (limited by rate limiter quota)
         """
         if not mentions:
             return []
+
+        # Check how many replies we can still post
+        if self.rate_limiter:
+            remaining_quota = self.rate_limiter.get_remaining_quota()
+            if remaining_quota <= 0:
+                logger.info("Rate limit reached, cannot reply to any mentions")
+                return []
+        else:
+            remaining_quota = 999  # No limit if no rate limiter
 
         # Filter out low quality (spam prevention)
         worthy_mentions = []
@@ -169,9 +179,10 @@ class MentionHandler:
             reverse=True
         )
 
-        # Return top N
-        selected = worthy_mentions[:self.max_replies_per_hour]
-        logger.info(f"Selected {len(selected)}/{len(mentions)} mentions to reply to")
+        # Return top N (limited by remaining quota)
+        max_to_select = min(remaining_quota, len(worthy_mentions))
+        selected = worthy_mentions[:max_to_select]
+        logger.info(f"Selected {len(selected)}/{len(mentions)} mentions to reply to (quota remaining: {remaining_quota})")
         return selected
 
     def get_original_tweet_context(self, tweet_id: str) -> Optional[str]:
@@ -466,6 +477,13 @@ If they ask about or mention $PFP, Armoski, or the NFT collection - be EXTREMELY
         Returns:
             True if successful
         """
+        # Check rate limit before posting
+        if self.rate_limiter:
+            can_reply, reason = self.rate_limiter.can_reply()
+            if not can_reply:
+                logger.warning(f"Cannot reply to mention: {reason}")
+                return False
+
         try:
             result = self.twitter_client.client.create_tweet(
                 text=reply_text,
@@ -476,6 +494,11 @@ If they ask about or mention $PFP, Armoski, or the NFT collection - be EXTREMELY
             if result.data:
                 logger.info(f"Posted reply to mention {mention_id}")
                 self.replied_mention_ids.add(mention_id)
+
+                # Record the reply in rate limiter
+                if self.rate_limiter:
+                    self.rate_limiter.record_reply()
+
                 return True
 
         except Exception as e:

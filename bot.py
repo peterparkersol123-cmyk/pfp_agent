@@ -21,6 +21,7 @@ from src.engagement.tracker import EngagementTracker
 from src.engagement.reply_handler import ReplyHandler
 from src.engagement.account_monitor import AccountMonitor
 from src.engagement.mention_handler import MentionHandler
+from src.utils.rate_limiter import SharedReplyRateLimiter
 
 setup_logger()
 logger = get_logger(__name__)
@@ -69,6 +70,7 @@ def main():
     post_interval_seconds = post_interval_minutes * 60
     enable_replies = os.getenv('ENABLE_REPLY_SYSTEM', 'True').lower() == 'true'
     max_replies_per_tweet = int(os.getenv('MAX_REPLIES_PER_TWEET', '2'))
+    max_total_replies_per_hour = int(os.getenv('MAX_TOTAL_REPLIES_PER_HOUR', '5'))
     mention_check_interval = int(os.getenv('MENTION_CHECK_INTERVAL_MINUTES', '5'))
 
     # Get monitored accounts (comma-separated usernames)
@@ -84,6 +86,7 @@ def main():
     print(f"  Post Interval: {post_interval_minutes} minutes ({post_interval_minutes/60:.1f} hours)")
     print(f"  Reply System: {'Enabled' if enable_replies else 'Disabled'}")
     print(f"  Max Replies Per Tweet: {max_replies_per_tweet}")
+    print(f"  Max Total Replies Per Hour: {max_total_replies_per_hour} (combined mentions + comments)")
     print(f"  Mention Monitoring: {'Async (every ' + str(mention_check_interval) + ' min)' if enable_replies else 'Disabled'}")
     print(f"  Monitored Accounts: {len(monitored_accounts)} accounts")
     if monitored_accounts:
@@ -99,9 +102,13 @@ def main():
         generator = ContentGenerator()
         twitter = TwitterClient()
         engagement_tracker = EngagementTracker(twitter)
-        reply_handler = ReplyHandler(twitter, max_replies_per_tweet=max_replies_per_tweet) if enable_replies else None
+
+        # Create shared rate limiter for all replies (mentions + tweet comments)
+        rate_limiter = SharedReplyRateLimiter(max_replies_per_hour=max_total_replies_per_hour) if enable_replies else None
+
+        reply_handler = ReplyHandler(twitter, max_replies_per_tweet=max_replies_per_tweet, rate_limiter=rate_limiter) if enable_replies else None
         account_monitor = AccountMonitor(twitter, target_usernames=monitored_accounts) if monitored_accounts else None
-        mention_handler = MentionHandler(twitter, max_replies_per_hour=5) if enable_replies else None
+        mention_handler = MentionHandler(twitter, rate_limiter=rate_limiter) if enable_replies else None
 
         logger.info("Bot started successfully")
 

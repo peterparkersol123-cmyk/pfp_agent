@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from src.api.twitter_client import TwitterClient
 from src.api.claude_client import ClaudeClient
 from src.utils.logger import get_logger
+from src.utils.rate_limiter import SharedReplyRateLimiter
 
 logger = get_logger(__name__)
 
@@ -19,7 +20,8 @@ class ReplyHandler:
         self,
         twitter_client: Optional[TwitterClient] = None,
         claude_client: Optional[ClaudeClient] = None,
-        max_replies_per_tweet: int = 2
+        max_replies_per_tweet: int = 2,
+        rate_limiter: Optional[SharedReplyRateLimiter] = None
     ):
         """
         Initialize reply handler.
@@ -28,10 +30,12 @@ class ReplyHandler:
             twitter_client: Twitter API client
             claude_client: Claude API client
             max_replies_per_tweet: Maximum replies to post per tweet
+            rate_limiter: Shared rate limiter for all replies
         """
         self.twitter_client = twitter_client or TwitterClient()
         self.claude_client = claude_client or ClaudeClient()
         self.max_replies = max_replies_per_tweet
+        self.rate_limiter = rate_limiter
         self.replied_to: set = set()  # Track replied comment IDs
         logger.info(f"Initialized ReplyHandler (max {max_replies_per_tweet} replies per tweet)")
 
@@ -136,6 +140,14 @@ class ReplyHandler:
         Returns:
             List of selected replies to respond to
         """
+        # Check rate limiter quota if available
+        if self.rate_limiter:
+            remaining_quota = self.rate_limiter.get_remaining_quota()
+            if remaining_quota <= 0:
+                logger.info("Rate limit reached, cannot reply to any comments")
+                return []
+            max_count = min(max_count, remaining_quota)
+
         # Filter out spam and low quality
         worthy_replies = [r for r in replies if self.is_worth_replying(r)]
 
@@ -258,6 +270,13 @@ If someone criticizes $PFP, Armoski, or the NFT collection, respond positively a
         Returns:
             True if successful
         """
+        # Check rate limit before posting
+        if self.rate_limiter:
+            can_reply, reason = self.rate_limiter.can_reply()
+            if not can_reply:
+                logger.warning(f"Cannot reply to comment: {reason}")
+                return False
+
         try:
             result = self.twitter_client.client.create_tweet(
                 text=reply_text,
@@ -268,6 +287,11 @@ If someone criticizes $PFP, Armoski, or the NFT collection, respond positively a
             if result.data:
                 logger.info(f"Posted reply to {reply_to_tweet_id}")
                 self.replied_to.add(reply_to_tweet_id)
+
+                # Record the reply in rate limiter
+                if self.rate_limiter:
+                    self.rate_limiter.record_reply()
+
                 return True
 
         except Exception as e:
