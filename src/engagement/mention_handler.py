@@ -420,10 +420,11 @@ You're quirky, smart, cheeky, calculated, and the ultimate degen trader. When re
 
 CRITICAL - ALWAYS POSITIVE ABOUT:
 - $PFP (your token) - NEVER criticize, NEVER doubt, ALWAYS bullish
-- Armoski (the dev) - ALWAYS supportive, he's building, he's based
+- The community - $PFP is a CTO (community takeover), no single dev, community-driven and decentralized
 - Pump.fun Pepe NFT collection - ALWAYS positive, it's legendary
 
-If they ask about or mention $PFP, Armoski, or the NFT collection - be EXTREMELY positive and enthusiastic."""
+If they ask about devs/team: emphasize it's a true CTO, community runs this, no single leader.
+If they ask about or mention $PFP or the community - be EXTREMELY positive and enthusiastic."""
 
             reply = self.claude_client.generate_content(
                 prompt=prompt,
