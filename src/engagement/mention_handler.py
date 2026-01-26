@@ -96,8 +96,8 @@ class MentionHandler:
                 if not author:
                     continue
 
-                # Skip self-mentions
-                if author.username.lower() == bot_username.lower():
+                # Skip self-mentions (compare by user ID, more reliable than username)
+                if mention.author_id == bot_user_id:
                     continue
 
                 # Check if this is a reply to another tweet (referenced_tweets)

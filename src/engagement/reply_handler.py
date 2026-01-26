@@ -37,6 +37,17 @@ class ReplyHandler:
         self.max_replies = max_replies_per_tweet
         self.rate_limiter = rate_limiter
         self.replied_to: set = set()  # Track replied comment IDs
+
+        # Get bot's own user ID to avoid self-replies
+        self.bot_user_id = None
+        try:
+            me = self.twitter_client.get_me()
+            if me:
+                self.bot_user_id = me.id
+                logger.info(f"Bot user ID: {self.bot_user_id}")
+        except Exception as e:
+            logger.error(f"Failed to get bot user ID: {e}")
+
         logger.info(f"Initialized ReplyHandler (max {max_replies_per_tweet} replies per tweet)")
 
     def get_tweet_replies(self, tweet_id: str) -> List[Dict]:
@@ -99,6 +110,11 @@ class ReplyHandler:
         Returns:
             True if worth replying
         """
+        # CRITICAL: Skip self-replies - never reply to our own tweets
+        if self.bot_user_id and reply.get('author_id') == self.bot_user_id:
+            logger.debug(f"Skipping self-reply (tweet ID: {reply['id']})")
+            return False
+
         # Already replied to this
         if reply['id'] in self.replied_to:
             return False
