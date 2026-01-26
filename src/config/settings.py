@@ -58,6 +58,12 @@ class Settings:
     TWITTER_MAX_TWEETS_PER_DAY: int = int(os.getenv("TWITTER_MAX_TWEETS_PER_DAY", "50"))
     TWITTER_MAX_TWEETS_PER_HOUR: int = int(os.getenv("TWITTER_MAX_TWEETS_PER_HOUR", "10"))
 
+    # Blocklist - Users to never reply to or engage with
+    BLOCKED_USERNAMES: set = {
+        "armoskii",  # Requested to be blocked
+        # Add more usernames here as needed (all lowercase)
+    }
+
     # Database
     DATABASE_PATH: str = os.getenv("DATABASE_PATH", str(DATA_DIR / "agent.db"))
 

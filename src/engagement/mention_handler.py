@@ -11,6 +11,7 @@ from src.api.twitter_client import TwitterClient
 from src.api.claude_client import ClaudeClient
 from src.utils.logger import get_logger
 from src.utils.rate_limiter import SharedReplyRateLimiter
+from src.config.settings import settings
 
 logger = get_logger(__name__)
 
@@ -98,6 +99,11 @@ class MentionHandler:
 
                 # Skip self-mentions (compare by user ID, more reliable than username)
                 if mention.author_id == bot_user_id:
+                    continue
+
+                # Skip blocked users
+                if author.username.lower() in settings.BLOCKED_USERNAMES:
+                    logger.info(f"Skipping mention from blocked user: @{author.username}")
                     continue
 
                 # Check if this is a reply to another tweet (referenced_tweets)

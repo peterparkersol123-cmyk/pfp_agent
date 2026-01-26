@@ -9,6 +9,7 @@ from src.api.twitter_client import TwitterClient
 from src.api.claude_client import ClaudeClient
 from src.utils.logger import get_logger
 from src.utils.rate_limiter import SharedReplyRateLimiter
+from src.config.settings import settings
 
 logger = get_logger(__name__)
 
@@ -113,6 +114,12 @@ class ReplyHandler:
         # CRITICAL: Skip self-replies - never reply to our own tweets
         if self.bot_user_id and reply.get('author_id') == self.bot_user_id:
             logger.debug(f"Skipping self-reply (tweet ID: {reply['id']})")
+            return False
+
+        # Skip blocked users
+        author_username = reply.get('author_username', '').lower()
+        if author_username in settings.BLOCKED_USERNAMES:
+            logger.info(f"Skipping reply from blocked user: @{author_username}")
             return False
 
         # Already replied to this
