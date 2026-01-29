@@ -107,7 +107,7 @@ def main():
         rate_limiter = SharedReplyRateLimiter(max_replies_per_hour=max_total_replies_per_hour) if enable_replies else None
 
         reply_handler = ReplyHandler(twitter, max_replies_per_tweet=max_replies_per_tweet, rate_limiter=rate_limiter) if enable_replies else None
-        account_monitor = AccountMonitor(twitter, target_usernames=monitored_accounts) if monitored_accounts else None
+        account_monitor = AccountMonitor(twitter, target_usernames=monitored_accounts, rate_limiter=rate_limiter) if monitored_accounts else None
         mention_handler = MentionHandler(twitter, rate_limiter=rate_limiter) if enable_replies else None
 
         logger.info("Bot started successfully")

@@ -8,6 +8,7 @@ from datetime import datetime, timezone, timedelta
 from src.api.twitter_client import TwitterClient
 from src.api.claude_client import ClaudeClient
 from src.utils.logger import get_logger
+from src.utils.rate_limiter import SharedReplyRateLimiter
 
 logger = get_logger(__name__)
 
@@ -19,7 +20,8 @@ class AccountMonitor:
         self,
         twitter_client: Optional[TwitterClient] = None,
         claude_client: Optional[ClaudeClient] = None,
-        target_usernames: Optional[List[str]] = None
+        target_usernames: Optional[List[str]] = None,
+        rate_limiter: Optional[SharedReplyRateLimiter] = None
     ):
         """
         Initialize account monitor.
@@ -28,11 +30,13 @@ class AccountMonitor:
             twitter_client: Twitter API client
             claude_client: Claude API client
             target_usernames: List of usernames to monitor (without @)
+            rate_limiter: Shared rate limiter for all reply types
         """
         self.twitter_client = twitter_client or TwitterClient()
         self.claude_client = claude_client or ClaudeClient()
         self.target_usernames = target_usernames or []
         self.replied_tweet_ids: Set[str] = set()  # Track what we've replied to
+        self.rate_limiter = rate_limiter
 
         logger.info(f"Initialized AccountMonitor for {len(self.target_usernames)} accounts")
 
@@ -244,6 +248,13 @@ If they mention $PFP or the community - be EXTREMELY positive and supportive."""
 
                 # Reply to each tweet
                 for tweet in tweets:
+                    # Check rate limiter before generating/posting
+                    if self.rate_limiter:
+                        can_reply, reason = self.rate_limiter.can_reply()
+                        if not can_reply:
+                            logger.info(f"Rate limit reached, skipping reply to @{username}: {reason}")
+                            break
+
                     # Generate reply
                     reply_text = self.generate_reply(tweet)
 
@@ -252,6 +263,9 @@ If they mention $PFP or the community - be EXTREMELY positive and supportive."""
                         if self.post_reply(reply_text, tweet['id']):
                             logger.info(f"✓ Replied to @{username}: {reply_text[:50]}...")
                             total_replies += 1
+                            # Record in shared rate limiter
+                            if self.rate_limiter:
+                                self.rate_limiter.record_reply()
                             time.sleep(3)  # Rate limiting between replies
                         else:
                             logger.warning(f"Failed to reply to @{username}")
