@@ -545,6 +545,13 @@ If they ask about or mention $PFP or the community - be EXTREMELY positive and e
         replies_posted = 0
         for mention in selected_mentions:
             try:
+                # Check rate limiter before spending Claude API call
+                if self.rate_limiter:
+                    can_reply, reason = self.rate_limiter.can_reply()
+                    if not can_reply:
+                        logger.info(f"Rate limit reached, stopping mention replies: {reason}")
+                        break
+
                 # Generate reply
                 reply_text = self.generate_mention_reply(mention)
 

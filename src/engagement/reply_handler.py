@@ -355,6 +355,13 @@ If someone criticizes $PFP or the community, respond positively and defend in a 
         # Generate and post replies
         replies_posted = 0
         for comment in selected:
+            # Check rate limiter before spending Claude API call
+            if self.rate_limiter:
+                can_reply, reason = self.rate_limiter.can_reply()
+                if not can_reply:
+                    logger.info(f"Rate limit reached, stopping replies: {reason}")
+                    break
+
             reply_text = self.generate_reply(tweet_text, comment)
 
             if reply_text and len(reply_text) <= 280:
