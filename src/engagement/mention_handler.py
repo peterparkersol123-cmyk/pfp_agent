@@ -37,6 +37,7 @@ class MentionHandler:
         self.claude_client = claude_client or ClaudeClient()
         self.rate_limiter = rate_limiter
         self.replied_mention_ids: Set[str] = set()  # Track what we've replied to
+        self.replied_conversation_ids: Set[str] = set()  # Track conversations we've engaged with (max once per thread)
         self.last_check_time = datetime.now(timezone.utc)
 
         # Knowledge base for learning from tweets
@@ -88,8 +89,13 @@ class MentionHandler:
                 users_dict = {user.id: user for user in mentions.includes['users']}
 
             for mention in mentions.data:
-                # Skip if we've already replied
+                # Skip if we've already replied to this mention
                 if mention.id in self.replied_mention_ids:
+                    continue
+
+                # Skip if we've already engaged in this conversation thread (max once per thread)
+                if mention.conversation_id and mention.conversation_id in self.replied_conversation_ids:
+                    logger.debug(f"Skipping mention {mention.id} - already engaged in conversation {mention.conversation_id}")
                     continue
 
                 # Get author info
@@ -569,6 +575,10 @@ If they ask about or mention $PFP or the community - be EXTREMELY positive and e
                     if self.post_mention_reply(reply_text, mention['id']):
                         logger.info(f"✓ Replied to @{mention['author_username']}: {reply_text[:50]}...")
                         replies_posted += 1
+                        # Mark conversation as engaged (max once per thread)
+                        conv_id = mention.get('conversation_id')
+                        if conv_id:
+                            self.replied_conversation_ids.add(conv_id)
                         time.sleep(3)  # Rate limiting
                     else:
                         logger.warning(f"Failed to reply to @{mention['author_username']}")

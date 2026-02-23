@@ -38,6 +38,7 @@ class ReplyHandler:
         self.max_replies = max_replies_per_tweet
         self.rate_limiter = rate_limiter
         self.replied_to: set = set()  # Track replied comment IDs
+        self.replied_tweet_ids: set = set()  # Track own tweet IDs we've already replied to (max once per tweet)
 
         # Get bot's own user ID to avoid self-replies
         self.bot_user_id = None
@@ -363,6 +364,11 @@ If someone criticizes $PFP or the community, respond positively and defend in a 
         """
         logger.info(f"Handling replies for tweet {tweet_id}")
 
+        # Max once per own tweet - skip if we've already replied to this tweet
+        if tweet_id in self.replied_tweet_ids:
+            logger.info(f"Already replied to tweet {tweet_id}, skipping (max once per tweet)")
+            return 0
+
         # Get all replies
         replies = self.get_tweet_replies(tweet_id)
 
@@ -395,6 +401,9 @@ If someone criticizes $PFP or the community, respond positively and defend in a 
                 if self.post_reply(reply_text, comment['id']):
                     replies_posted += 1
                     logger.info(f"Replied to @{comment['author_username']}: {reply_text[:50]}...")
+                    # Mark own tweet as replied to - max once per tweet
+                    self.replied_tweet_ids.add(tweet_id)
+                    break  # Only one reply per own tweet
                 else:
                     logger.warning(f"Failed to post reply to @{comment['author_username']}")
             else:
