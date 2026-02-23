@@ -53,7 +53,7 @@ class ReplyHandler:
 
     def get_tweet_replies(self, tweet_id: str) -> List[Dict]:
         """
-        Fetch replies/comments on a tweet.
+        Fetch replies/comments on a tweet, excluding the bot's own replies.
 
         Args:
             tweet_id: Tweet ID to get replies for
@@ -62,8 +62,19 @@ class ReplyHandler:
             List of reply dicts with user info and text
         """
         try:
-            # Search for tweets that are replies to this tweet
+            # Get bot's own username to exclude from search
+            bot_username = None
+            try:
+                me = self.twitter_client.client.get_me(user_auth=True)
+                if me and me.data:
+                    bot_username = me.data.username
+            except Exception:
+                pass
+
+            # Search for tweets that are replies to this tweet, excluding self
             query = f"conversation_id:{tweet_id} is:reply"
+            if bot_username:
+                query += f" -from:{bot_username}"
 
             tweets = self.twitter_client.client.search_recent_tweets(
                 query=query,
@@ -83,16 +94,23 @@ class ReplyHandler:
 
             for tweet in tweets.data:
                 user = users_dict.get(tweet.author_id)
-                if user:
-                    replies.append({
-                        'id': tweet.id,
-                        'text': tweet.text,
-                        'author_id': tweet.author_id,
-                        'author_username': user.username,
-                        'author_followers': user.public_metrics.get('followers_count', 0),
-                        'likes': tweet.public_metrics.get('like_count', 0),
-                        'created_at': tweet.created_at
-                    })
+                if not user:
+                    continue
+
+                # Double-check: never include bot's own replies
+                if self.bot_user_id and tweet.author_id == self.bot_user_id:
+                    logger.debug(f"Filtered out self-reply in get_tweet_replies: {tweet.id}")
+                    continue
+
+                replies.append({
+                    'id': tweet.id,
+                    'text': tweet.text,
+                    'author_id': tweet.author_id,
+                    'author_username': user.username,
+                    'author_followers': user.public_metrics.get('followers_count', 0),
+                    'likes': tweet.public_metrics.get('like_count', 0),
+                    'created_at': tweet.created_at
+                })
 
             logger.info(f"Found {len(replies)} replies to tweet {tweet_id}")
             return replies
