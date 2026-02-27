@@ -9,6 +9,7 @@ from src.api.twitter_client import TwitterClient
 from src.api.claude_client import ClaudeClient
 from src.utils.logger import get_logger
 from src.utils.rate_limiter import SharedReplyRateLimiter
+from src.utils.state_manager import BotStateManager
 from src.config.settings import settings
 
 logger = get_logger(__name__)
@@ -22,7 +23,8 @@ class ReplyHandler:
         twitter_client: Optional[TwitterClient] = None,
         claude_client: Optional[ClaudeClient] = None,
         max_replies_per_tweet: int = 2,
-        rate_limiter: Optional[SharedReplyRateLimiter] = None
+        rate_limiter: Optional[SharedReplyRateLimiter] = None,
+        state_manager: Optional[BotStateManager] = None
     ):
         """
         Initialize reply handler.
@@ -32,13 +34,21 @@ class ReplyHandler:
             claude_client: Claude API client
             max_replies_per_tweet: Maximum replies to post per tweet
             rate_limiter: Shared rate limiter for all replies
+            state_manager: Persistent state manager (survives restarts)
         """
         self.twitter_client = twitter_client or TwitterClient()
         self.claude_client = claude_client or ClaudeClient()
         self.max_replies = max_replies_per_tweet
         self.rate_limiter = rate_limiter
-        self.replied_to: set = set()  # Track replied comment IDs
-        self.replied_tweet_ids: set = set()  # Track own tweet IDs we've already replied to (max once per tweet)
+        self.state_manager = state_manager
+
+        # Load persisted state if available, otherwise start fresh
+        if state_manager:
+            self.replied_to: set = state_manager.replied_comment_ids
+            self.replied_tweet_ids: set = state_manager.replied_own_tweet_ids
+        else:
+            self.replied_to: set = set()
+            self.replied_tweet_ids: set = set()
 
         # Get bot's own user ID to avoid self-replies
         self.bot_user_id = None
@@ -340,6 +350,10 @@ If someone criticizes $PFP or the community, respond positively and defend in a 
                 logger.info(f"Posted reply to {reply_to_tweet_id}")
                 self.replied_to.add(reply_to_tweet_id)
 
+                # Persist to disk (survives restarts)
+                if self.state_manager:
+                    self.state_manager.add_replied_comment(reply_to_tweet_id)
+
                 # Record the reply in rate limiter
                 if self.rate_limiter:
                     self.rate_limiter.record_reply()
@@ -401,8 +415,10 @@ If someone criticizes $PFP or the community, respond positively and defend in a 
                 if self.post_reply(reply_text, comment['id']):
                     replies_posted += 1
                     logger.info(f"Replied to @{comment['author_username']}: {reply_text[:50]}...")
-                    # Mark own tweet as replied to - max once per tweet
+                    # Mark own tweet as replied to - max once per tweet, persist to disk
                     self.replied_tweet_ids.add(tweet_id)
+                    if self.state_manager:
+                        self.state_manager.add_replied_own_tweet(tweet_id)
                     break  # Only one reply per own tweet
                 else:
                     logger.warning(f"Failed to post reply to @{comment['author_username']}")

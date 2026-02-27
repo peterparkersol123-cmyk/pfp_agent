@@ -9,6 +9,7 @@ from src.api.twitter_client import TwitterClient
 from src.api.claude_client import ClaudeClient
 from src.utils.logger import get_logger
 from src.utils.rate_limiter import SharedReplyRateLimiter
+from src.utils.state_manager import BotStateManager
 
 logger = get_logger(__name__)
 
@@ -21,7 +22,8 @@ class AccountMonitor:
         twitter_client: Optional[TwitterClient] = None,
         claude_client: Optional[ClaudeClient] = None,
         target_usernames: Optional[List[str]] = None,
-        rate_limiter: Optional[SharedReplyRateLimiter] = None
+        rate_limiter: Optional[SharedReplyRateLimiter] = None,
+        state_manager: Optional[BotStateManager] = None
     ):
         """
         Initialize account monitor.
@@ -31,12 +33,19 @@ class AccountMonitor:
             claude_client: Claude API client
             target_usernames: List of usernames to monitor (without @)
             rate_limiter: Shared rate limiter for all reply types
+            state_manager: Persistent state manager (survives restarts)
         """
         self.twitter_client = twitter_client or TwitterClient()
         self.claude_client = claude_client or ClaudeClient()
         self.target_usernames = target_usernames or []
-        self.replied_tweet_ids: Set[str] = set()  # Track what we've replied to
         self.rate_limiter = rate_limiter
+        self.state_manager = state_manager
+
+        # Load persisted state if available, otherwise start fresh
+        if state_manager:
+            self.replied_tweet_ids: Set[str] = state_manager.replied_monitored_tweet_ids
+        else:
+            self.replied_tweet_ids: Set[str] = set()
 
         logger.info(f"Initialized AccountMonitor for {len(self.target_usernames)} accounts")
 
@@ -220,6 +229,11 @@ If they mention $PFP or the community - be EXTREMELY positive and supportive."""
             if result.data:
                 logger.info(f"Posted reply to tweet {tweet_id}")
                 self.replied_tweet_ids.add(tweet_id)
+
+                # Persist to disk (survives restarts)
+                if self.state_manager:
+                    self.state_manager.add_replied_monitored_tweet(tweet_id)
+
                 return True
 
         except Exception as e:

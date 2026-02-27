@@ -16,11 +16,12 @@ class Settings:
 
     # Project paths
     BASE_DIR = Path(__file__).resolve().parent.parent.parent
-    DATA_DIR = BASE_DIR / "data"
+    # DATA_DIR: override with DATA_DIR env var to point at a Railway Volume (e.g. /data)
+    DATA_DIR = Path(os.getenv("DATA_DIR", str(BASE_DIR / "data")))
     LOGS_DIR = BASE_DIR / "logs"
 
     # Ensure directories exist
-    DATA_DIR.mkdir(exist_ok=True)
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
     LOGS_DIR.mkdir(exist_ok=True)
 
     # Claude API Configuration
@@ -64,7 +65,7 @@ class Settings:
         # Add more usernames here as needed (all lowercase)
     }
 
-    # Database
+    # Database — stored in DATA_DIR so it persists on the Railway volume
     DATABASE_PATH: str = os.getenv("DATABASE_PATH", str(DATA_DIR / "agent.db"))
 
     # Logging

@@ -22,6 +22,7 @@ from src.engagement.reply_handler import ReplyHandler
 from src.engagement.account_monitor import AccountMonitor
 from src.engagement.mention_handler import MentionHandler
 from src.utils.rate_limiter import SharedReplyRateLimiter
+from src.utils.state_manager import BotStateManager
 
 setup_logger()
 logger = get_logger(__name__)
@@ -103,12 +104,16 @@ def main():
         twitter = TwitterClient()
         engagement_tracker = EngagementTracker(twitter)
 
+        # Create persistent state manager — loads all prior engagement history from disk
+        state_manager = BotStateManager()
+        logger.info("Bot state loaded from disk")
+
         # Create shared rate limiter for all replies (mentions + tweet comments)
         rate_limiter = SharedReplyRateLimiter(max_replies_per_hour=max_total_replies_per_hour) if enable_replies else None
 
-        reply_handler = ReplyHandler(twitter, max_replies_per_tweet=max_replies_per_tweet, rate_limiter=rate_limiter) if enable_replies else None
-        account_monitor = AccountMonitor(twitter, target_usernames=monitored_accounts, rate_limiter=rate_limiter) if monitored_accounts else None
-        mention_handler = MentionHandler(twitter, rate_limiter=rate_limiter) if enable_replies else None
+        reply_handler = ReplyHandler(twitter, max_replies_per_tweet=max_replies_per_tweet, rate_limiter=rate_limiter, state_manager=state_manager) if enable_replies else None
+        account_monitor = AccountMonitor(twitter, target_usernames=monitored_accounts, rate_limiter=rate_limiter, state_manager=state_manager) if monitored_accounts else None
+        mention_handler = MentionHandler(twitter, rate_limiter=rate_limiter, state_manager=state_manager) if enable_replies else None
 
         logger.info("Bot started successfully")
 
@@ -126,7 +131,10 @@ def main():
             logger.info("Started async mention monitoring thread")
 
         tweet_count = 0
-        recent_tweets = []  # Store recent tweet IDs for reply checking
+        # Restore recent tweets from persisted state so reply checking resumes after restart
+        recent_tweets = state_manager.recent_tweets[:]
+        if recent_tweets:
+            logger.info(f"Restored {len(recent_tweets)} recent tweets from persisted state")
 
         while True:
             try:
@@ -230,6 +238,9 @@ def main():
                     # Keep only last 10 tweets
                     if len(recent_tweets) > 10:
                         recent_tweets.pop(0)
+
+                    # Persist recent tweets so the bot resumes tracking on restart
+                    state_manager.update_recent_tweets(recent_tweets)
 
                     # Start tracking engagement
                     engagement_tracker.track_tweet(tweet_id, tweet)

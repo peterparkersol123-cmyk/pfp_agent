@@ -11,6 +11,7 @@ from src.api.twitter_client import TwitterClient
 from src.api.claude_client import ClaudeClient
 from src.utils.logger import get_logger
 from src.utils.rate_limiter import SharedReplyRateLimiter
+from src.utils.state_manager import BotStateManager
 from src.config.settings import settings
 
 logger = get_logger(__name__)
@@ -23,7 +24,8 @@ class MentionHandler:
         self,
         twitter_client: Optional[TwitterClient] = None,
         claude_client: Optional[ClaudeClient] = None,
-        rate_limiter: Optional[SharedReplyRateLimiter] = None
+        rate_limiter: Optional[SharedReplyRateLimiter] = None,
+        state_manager: Optional[BotStateManager] = None
     ):
         """
         Initialize mention handler.
@@ -32,19 +34,28 @@ class MentionHandler:
             twitter_client: Twitter API client
             claude_client: Claude API client
             rate_limiter: Shared rate limiter for all replies
+            state_manager: Persistent state manager (survives restarts)
         """
         self.twitter_client = twitter_client or TwitterClient()
         self.claude_client = claude_client or ClaudeClient()
         self.rate_limiter = rate_limiter
-        self.replied_mention_ids: Set[str] = set()  # Track what we've replied to
-        self.replied_conversation_ids: Set[str] = set()  # Track conversations we've engaged with (max once per thread)
+        self.state_manager = state_manager
+
+        # Load persisted state if available, otherwise start fresh
+        if state_manager:
+            self.replied_mention_ids: Set[str] = state_manager.replied_mention_ids
+            self.replied_conversation_ids: Set[str] = state_manager.replied_conversation_ids
+        else:
+            self.replied_mention_ids: Set[str] = set()
+            self.replied_conversation_ids: Set[str] = set()
+
         self.last_check_time = datetime.now(timezone.utc)
 
-        # Knowledge base for learning from tweets
-        self.knowledge_file = Path("data/learned_context.jsonl")
-        self.knowledge_file.parent.mkdir(exist_ok=True)
+        # Knowledge base for learning from tweets — stored in DATA_DIR for persistence
+        self.knowledge_file = settings.DATA_DIR / "learned_context.jsonl"
+        self.knowledge_file.parent.mkdir(parents=True, exist_ok=True)
 
-        logger.info(f"Initialized MentionHandler with shared rate limiter")
+        logger.info(f"Initialized MentionHandler (state_manager={'yes' if state_manager else 'no'})")
 
     def get_recent_mentions(self, since_minutes: int = 120) -> List[Dict]:
         """
@@ -488,13 +499,14 @@ If they ask about or mention $PFP or the community - be EXTREMELY positive and e
 
         return None
 
-    def post_mention_reply(self, reply_text: str, mention_id: str) -> bool:
+    def post_mention_reply(self, reply_text: str, mention_id: str, conversation_id: Optional[str] = None) -> bool:
         """
         Post a reply to a mention.
 
         Args:
             reply_text: Text to reply with
             mention_id: ID of the mention to reply to
+            conversation_id: Conversation thread ID to mark as engaged
 
         Returns:
             True if successful
@@ -515,7 +527,15 @@ If they ask about or mention $PFP or the community - be EXTREMELY positive and e
 
             if result.data:
                 logger.info(f"Posted reply to mention {mention_id}")
+
+                # Update in-memory sets
                 self.replied_mention_ids.add(mention_id)
+                if conversation_id:
+                    self.replied_conversation_ids.add(conversation_id)
+
+                # Persist to disk (survives restarts)
+                if self.state_manager:
+                    self.state_manager.add_replied_mention(mention_id, conversation_id)
 
                 # Record the reply in rate limiter
                 if self.rate_limiter:
@@ -571,14 +591,11 @@ If they ask about or mention $PFP or the community - be EXTREMELY positive and e
                 reply_text = self.generate_mention_reply(mention)
 
                 if reply_text and len(reply_text) <= 280:
-                    # Post reply
-                    if self.post_mention_reply(reply_text, mention['id']):
+                    # Post reply — pass conversation_id so it's persisted immediately
+                    conv_id = mention.get('conversation_id')
+                    if self.post_mention_reply(reply_text, mention['id'], conversation_id=conv_id):
                         logger.info(f"✓ Replied to @{mention['author_username']}: {reply_text[:50]}...")
                         replies_posted += 1
-                        # Mark conversation as engaged (max once per thread)
-                        conv_id = mention.get('conversation_id')
-                        if conv_id:
-                            self.replied_conversation_ids.add(conv_id)
                         time.sleep(3)  # Rate limiting
                     else:
                         logger.warning(f"Failed to reply to @{mention['author_username']}")
