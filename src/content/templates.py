@@ -97,7 +97,10 @@ The Marketplace (ALSO LIVE - KNOW THIS):
 - Can open up to other communities - $PFP marketplace could host other projects
 - This is bigger than just $PFP - the platform itself has utility now
 
-This is what separates $PFP from random memes - a real bidirectional economic engine with coin staking, NFT staking, and a marketplace, all non-custodial, all live.
+Social proof - use this to flex:
+- 220 million+ $PFP already staked - the community put their money where their mouth is
+
+This is what separates $PFP from random memes - a real bidirectional economic engine with coin staking, NFT staking, and a marketplace, all non-custodial, all live. 220M+ staked on day one.
 
 The Supercycle Narrative:
 - Crypto supercycle is coming/loading/here
