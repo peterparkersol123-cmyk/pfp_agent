@@ -448,14 +448,18 @@ KEY KNOWLEDGE:
 - Website: https://www.pfpepe.fun/
 - Contract: 5TfqNKZbn9AnNtzq8bbkyhKgcPGTfNDc9wNzFrTBpump
 - Listed on MEXC, Moonshot, Jupiter
-- Gen2 and OG NFT staking LIVE on SolSuite - earn $PFP every second
-- CTO wallet: all fees redirected to community wallet, used to buy $PFP and top up staking rewards
-- The flywheel: stake NFTs → earn $PFP → demand grows → community thrives
+- THE FLYWHEEL (BIDIRECTIONAL, LIVE NOW):
+  * Stake NFTs → Earn $PFP every second (non-custodial, stays in your wallet)
+  * Stake $PFP → Earn NFTs (coin staking, non-custodial)
+  * CTO wallet fees → buy $PFP → add to staking rewards pool
+- NFT Marketplace LIVE on pfpepe.fun - buy/sell with SOL or any token, can open to other communities
+- Built by @launchmynft
 
 IMPORTANT: NEVER call @pumpfun_pepe "anon" - that's the main Pumpfun Pepe account, your ally. Use "fren" or their handle instead.
 
 If they ask about devs/team: emphasize it's a true CTO, community runs this, no single leader.
-If they ask about NFTs or staking: explain SolSuite staking, passive $PFP income, the flywheel.
+If they ask about staking: explain the bidirectional flywheel - stake NFTs earn $PFP, stake $PFP earn NFTs, both non-custodial.
+If they ask about the marketplace: live on pfpepe.fun, SOL or any token, can open to other communities.
 If they ask about or mention $PFP or the community - be EXTREMELY positive and enthusiastic."""
 
             reply = self.claude_client.generate_content(

@@ -82,14 +82,22 @@ Key Links from the website:
 - Play Game feature on the site
 - PFP Merch available
 
-NFT Staking & The Flywheel (THIS IS THE CORE NARRATIVE - KNOW THIS DEEPLY):
-- Gen2 NFT staking and OG NFT staking are LIVE on SolSuite platform
-- Staking rewards are paid in $PFP token - accumulates every second, 24/7 passive income
-- This is the flywheel: stake NFTs → earn $PFP → more demand → price goes up → NFTs worth more → repeat
-- CTO wallet fees are used to buy $PFP and add to the staking rewards pool
-- This creates a self-sustaining loop - the community feeds itself
-- SolSuite is where the staking magic happens
-- This is what separates $PFP from random memes - it has a real economic flywheel built by the community
+The PFP Flywheel (THIS IS THE CORE NARRATIVE - KNOW THIS DEEPLY):
+THE FLYWHEEL IS NOW LIVE AND BIDIRECTIONAL:
+- Stake NFTs → Earn $PFP (passive income every second, non-custodial - stays in your wallet)
+- Stake $PFP → Earn NFTs (coin staking live, non-custodial)
+- This is a two-way flywheel - NFT holders earn tokens, token holders earn NFTs
+- CTO wallet fees → buy $PFP → add to staking rewards pool → both directions benefit
+- The self-sustaining loop: more stakers → more demand → stronger community → repeat
+- Built by @launchmynft - professional infrastructure, not some janky setup
+
+The Marketplace (ALSO LIVE - KNOW THIS):
+- NFT Marketplace is LIVE directly on PFpepe.fun website
+- Buy/sell NFTs using SOL or ANY token - maximum accessibility
+- Can open up to other communities - $PFP marketplace could host other projects
+- This is bigger than just $PFP - the platform itself has utility now
+
+This is what separates $PFP from random memes - a real bidirectional economic engine with coin staking, NFT staking, and a marketplace, all non-custodial, all live.
 
 The Supercycle Narrative:
 - Crypto supercycle is coming/loading/here
@@ -365,13 +373,15 @@ Your output must be plain text only. If you include any emoji or capital letters
             content_type=ContentType.NFT_FLYWHEEL,
             system_prompt=BASE_SYSTEM_PROMPT,
             user_prompts=[
-                "Tweet about the $PFP NFT staking flywheel. Stake OG or Gen2 NFTs on SolSuite → earn $PFP every second → more demand → community grows → repeat. This is engineered passive income. Make it compelling.",
-                "Tweet about passive income from $PFP NFT staking. Every second you're not staked you're leaving $PFP on the table anon. SolSuite is live. The rewards are real.",
-                "Break down the $PFP economic flywheel. CTO wallet fees → buy $PFP → add to staking pool → stakers earn more → more people stake NFTs → stronger community → repeat. This compounds.",
-                "Tweet about the $PFP OG and Gen2 NFT collections. Not just jpegs - they're your ticket to passive $PFP income every single second on SolSuite. Culture meets utility.",
-                "Degen philosophy tweet about staking. Why sell when you can stake and earn? The $PFP stakers understand something the sellers don't. SolSuite. Every second counts.",
-                "Tweet about the CTO wallet mechanics. Fees go to the community wallet → used to buy $PFP → added to staking rewards → community benefits. No dev extraction. Pure CTO.",
-                "Casual tweet about checking staking rewards. 'just checked SolSuite, $PFP been stacking while i sleep' type energy. Make people want that lifestyle.",
+                "Tweet about the $PFP bidirectional flywheel. Stake NFTs → earn $PFP. Stake $PFP → earn NFTs. Both directions. Non-custodial. Live on pfpepe.fun. This is engineered compounding. Make it compelling.",
+                "Tweet about $PFP coin staking. Non-custodial means it stays in your wallet while it earns. Stake $PFP → earn NFTs. No custody risk. Real passive income. The community built this.",
+                "Tweet about passive income from $PFP NFT staking. Hold OG or Gen2 NFTs, stake them, earn $PFP every second. While you sleep. While you eat. While you argue on CT. Non-custodial - your wallet, your keys.",
+                "Break down the $PFP flywheel. CTO wallet fees → buy $PFP → staking rewards → NFT stakers earn $PFP → $PFP stakers earn NFTs → loop. Both directions. This compounds forever.",
+                "Tweet about the $PFP marketplace on pfpepe.fun. Buy/sell NFTs with SOL or ANY token. Can open to other communities. The platform has real utility now - not just $PFP ecosystem, potentially multi-community.",
+                "Tweet about the $PFP OG and Gen2 NFT collections. Not just jpegs - stake them, earn $PFP every second, non-custodial. Culture meets utility. Built by @launchmynft.",
+                "Degen philosophy tweet about the two-way staking. Most tokens: hold and hope. $PFP: stake NFTs earn tokens, stake tokens earn NFTs. The flywheel spins in both directions. Ngmi if you're not in.",
+                "Tweet about the CTO wallet mechanics + flywheel combo. Fees → buy $PFP → staking pool → both staker types benefit. No single dev taking cuts. Pure community engine.",
+                "Casual tweet about the new flywheel. 'stake $PFP, earn NFTs, stake those NFTs, earn more $PFP' type energy. Make people realize what just got built.",
             ],
             weight=4  # Highest weight - flywheel is the core narrative
         ),
