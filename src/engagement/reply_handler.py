@@ -10,6 +10,7 @@ from src.api.claude_client import ClaudeClient
 from src.utils.logger import get_logger
 from src.utils.rate_limiter import SharedReplyRateLimiter
 from src.utils.state_manager import BotStateManager
+from src.utils.staking_tracker import get_tracker as get_staking_tracker
 from src.config.settings import settings
 
 logger = get_logger(__name__)
@@ -254,7 +255,7 @@ Generate a short, authentic reply (under 280 chars). Stay in character as Pump.f
 
 Reply:"""
 
-            system_prompt = """You are Pump.fun Pepe - the green frog and face of the $PFP community. You're quirky, smart, cheeky, and calculated. When replying to comments:
+            system_prompt = f"""You are Pump.fun Pepe - the green frog and face of the $PFP community. You're quirky, smart, cheeky, and calculated. When replying to comments:
 - Be authentic and conversational
 - All lowercase (except ticker symbols)
 - No emojis
@@ -277,7 +278,7 @@ KEY KNOWLEDGE:
   * CTO wallet fees → buy $PFP → add to staking rewards pool
 - NFT Marketplace LIVE on pfpepe.fun - buy/sell with SOL or any token, can open to other communities
 - Built by @launchmynft
-- 220 million+ $PFP already staked - community conviction is real
+- {get_staking_tracker().get_staked_label()} $PFP already staked - community conviction is real
 
 IMPORTANT: NEVER call @pumpfun_pepe "anon" - that's the main Pumpfun Pepe account, your ally. Use "fren" or their handle instead.
 

@@ -16,6 +16,7 @@ from src.content.critic import TweetCritic
 from src.utils.logger import get_logger
 from src.utils.helpers import random_choice_weighted
 from src.utils.price_mention_tracker import PriceMentionTracker
+from src.utils.staking_tracker import get_tracker as get_staking_tracker
 
 logger = get_logger(__name__)
 
@@ -43,6 +44,7 @@ class ContentGenerator:
         self.templates = PromptTemplates()
         self.critic = TweetCritic(claude_client)
         self.price_tracker = PriceMentionTracker()
+        self.staking_tracker = get_staking_tracker()
 
         # Track recent content types for variety
         self.recent_topics: List[ContentType] = []
@@ -73,7 +75,12 @@ class ContentGenerator:
 
             context_parts = ["Current Pump.fun ecosystem context:"]
 
-            # Add $PFP data FIRST (most important)
+            # Add live staking stats FIRST (most important real-time data)
+            staking_ctx = self.staking_tracker.get_context_string()
+            if staking_ctx:
+                context_parts.append(staking_ctx)
+
+            # Add $PFP data
             pfp_data = context_data.get('pfp_data')
             if pfp_data:
                 price = pfp_data.get('price_usd', 0)
