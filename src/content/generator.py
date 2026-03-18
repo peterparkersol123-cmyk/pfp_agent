@@ -75,10 +75,12 @@ class ContentGenerator:
 
             context_parts = ["Current Pump.fun ecosystem context:"]
 
-            # Add live staking stats FIRST (most important real-time data)
+            # Add live staking stats — rate-limited to once per 8 hours so the
+            # bot doesn't hammer the same number in every single tweet
             staking_ctx = self.staking_tracker.get_context_string()
             if staking_ctx:
                 context_parts.append(staking_ctx)
+                self.staking_tracker.record_surfaced()
 
             # Add $PFP data
             pfp_data = context_data.get('pfp_data')

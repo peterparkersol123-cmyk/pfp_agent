@@ -9,6 +9,7 @@ without hammering the API.
 import threading
 import time
 import requests
+from datetime import datetime, timedelta
 from typing import Optional, Dict
 
 from src.utils.logger import get_logger
@@ -54,9 +55,16 @@ class StakingTracker:
         label   = tracker.get_staked_label()     # e.g. "366.35M"
     """
 
+    # How often the staking stat is allowed to appear in tweet generation context.
+    # The stat is available as background knowledge at all times via get_staked_label(),
+    # but we only surface it in the active context this often so the bot doesn't
+    # hammer the same number every single tweet.
+    SURFACE_INTERVAL_HOURS = 8
+
     def __init__(self):
         self._stats: Optional[Dict] = None
         self._lock = threading.Lock()
+        self._last_surfaced: datetime = datetime.min  # never surfaced yet
 
         # Fetch immediately so stats are ready before the first tweet
         self._fetch()
@@ -113,11 +121,20 @@ class StakingTracker:
 
     def get_context_string(self) -> Optional[str]:
         """
-        Returns a one-line context string suitable for injecting into prompts.
-        Returns None if stats are unavailable.
+        Returns the staking context string if it is due to be surfaced
+        (i.e. not mentioned in the last SURFACE_INTERVAL_HOURS hours).
+        Returns None if stats are unavailable OR it was surfaced recently.
+
+        Call record_surfaced() after the tweet is posted to reset the timer.
         """
         stats = self.get_stats()
         if not stats:
+            return None
+
+        elapsed = datetime.now() - self._last_surfaced
+        if elapsed < timedelta(hours=self.SURFACE_INTERVAL_HOURS):
+            hours_left = self.SURFACE_INTERVAL_HOURS - elapsed.total_seconds() / 3600
+            logger.debug(f"Staking context suppressed — due again in {hours_left:.1f}h")
             return None
 
         total_staked = stats.get("totalStaked", 0)
@@ -129,3 +146,8 @@ class StakingTracker:
             f"- $PFP COIN STAKING (LIVE): {_fmt(total_staked)} tokens staked "
             f"({staked_pct:.1f}% of supply locked), {unique_stakers} unique stakers"
         )
+
+    def record_surfaced(self):
+        """Call this after a tweet that includes the staking context is generated."""
+        self._last_surfaced = datetime.now()
+        logger.info("Staking stat surfaced — suppressing for next 8 hours")
