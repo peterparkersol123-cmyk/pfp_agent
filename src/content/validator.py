@@ -157,7 +157,7 @@ class ContentValidator:
         # Check hashtag usage
         hashtag_count = count_hashtags(content)
         if hashtag_count == 0 and self.use_hashtags:
-            suggestions.append("Consider adding relevant hashtags (e.g., #Pumpfun, #Solana, #Crypto)")
+            suggestions.append("Consider adding relevant hashtags (e.g., #PFP, #Solana, #Crypto)")
 
         # Check for call to action
         cta_patterns = [
