@@ -35,6 +35,11 @@ class BotStateManager:
         Args:
             state_file: Path to JSON state file. Defaults to data/bot_state.json
                         or DATA_DIR env var if set.
+
+        Environment variables:
+            CLEAR_STATE_ON_START=true  — wipe all engagement history on startup.
+                                         Use this after switching Twitter accounts so
+                                         stale IDs from the old account don't linger.
         """
         if state_file is None:
             data_dir = os.getenv("DATA_DIR", "data")
@@ -43,8 +48,17 @@ class BotStateManager:
         self.state_file = Path(state_file)
         self.state_file.parent.mkdir(parents=True, exist_ok=True)
 
-        # Load persisted state
-        state = self._load()
+        # CLEAR_STATE_ON_START: wipe persisted state (e.g. after account switch)
+        clear_state = os.getenv("CLEAR_STATE_ON_START", "false").lower() == "true"
+        if clear_state:
+            logger.warning(
+                "CLEAR_STATE_ON_START=true — wiping all persisted engagement state. "
+                "Remove this env var after the first restart to resume normal tracking."
+            )
+            state = {}
+        else:
+            # Load persisted state
+            state = self._load()
 
         self.replied_mention_ids: Set[str] = set(state.get("replied_mention_ids", []))
         self.replied_conversation_ids: Set[str] = set(state.get("replied_conversation_ids", []))

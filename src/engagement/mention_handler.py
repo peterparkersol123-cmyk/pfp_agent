@@ -179,8 +179,8 @@ class MentionHandler:
         for mention in mentions:
             text = mention['text'].lower()
 
-            # Skip very short mentions
-            if len(text) < 15:
+            # Skip very short mentions (5 chars is the floor — allows "gm", "wen", "?" etc)
+            if len(text) < 5:
                 continue
 
             # Skip spam patterns
@@ -188,8 +188,8 @@ class MentionHandler:
             if any(indicator in text for indicator in spam_indicators):
                 continue
 
-            # Skip if all caps
-            if text.isupper() and len(text) > 20:
+            # Skip if all caps AND very long (short all-caps like "GM" is fine)
+            if text.isupper() and len(text) > 40:
                 continue
 
             worthy_mentions.append(mention)
@@ -246,7 +246,6 @@ class MentionHandler:
     def is_worth_learning(self, tweet_text: str) -> bool:
         """
         Determine if a tweet is worth saving to knowledge base.
-        Uses advanced filters inspired by X search operators and Pump.fun intelligence.
 
         Args:
             tweet_text: Tweet text to evaluate
@@ -256,11 +255,11 @@ class MentionHandler:
         """
         text_lower = tweet_text.lower()
 
-        # Must be substantial (increased from 30 to 50 for quality)
+        # Must be substantial
         if len(tweet_text) < 50:
             return False
 
-        # EXPANDED spam/scam indicators (Grok-inspired)
+        # Skip spam/scam content
         spam_indicators = [
             'dm me', 'click here', 'buy now', 'check out my', 'follow back',
             'airdrop now', 'free mint', 'join presale', 'urgent buy',
@@ -270,47 +269,42 @@ class MentionHandler:
         if any(indicator in text_lower for indicator in spam_indicators):
             return False
 
-        # HIGH-VALUE SIGNALS - Pump.fun specific events
+        # HIGH-VALUE SIGNALS — pfp/flywheel ecosystem
         high_value_signals = [
-            # Pump.fun milestones
-            'dev burn', 'curve complete', 'king of the hill', 'fair launch',
-            'bonding curve', 'graduated', 'raydium pool',
-            # Safety indicators
-            'mint revoked', 'freeze disabled', 'dev holds', 'top holders',
-            'liquidity locked', 'no snipers',
+            # pfp flywheel events
+            'stake', 'staking', 'nft', 'flywheel', 'cto', 'community takeover',
+            'pfp', 'pfpepe', 'pfpepe.fun', 'launchmynft',
+            # Solana ecosystem signals
+            'solana', 'sol', 'jupiter', 'mexc', 'moonshot',
             # On-chain metrics
             'mcap', 'market cap', 'volume', 'liquidity', 'holders',
             'whale buy', 'whale activity', 'smart money',
             # Narratives & metas
-            'ai agent', 'agent economy', 'depin', 'solana summer',
+            'ai agent', 'agent economy', 'solana summer',
             'narrative shift', 'meta changing', 'trend rotating',
         ]
 
-        # VALUABLE content keywords (expanded)
+        # VALUABLE content keywords
         valuable_keywords = [
-            # Pump.fun ecosystem
-            'pump.fun', 'pumpfun', 'pump', 'bonding', 'graduate', 'raydium',
-            'pumpswap', 'curve', 'launch terminal',
             # Market/trading intelligence
-            'volume spike', 'liquidity', 'price action', 'breakout',
-            'accumulation', 'distribution', 'whale', 'smart money',
-            # Token analysis
-            'token', 'coin', 'launch', 'mint', '$', 'deployer',
-            'dev wallet', 'holder distribution',
-            # Narratives (expanded)
+            'volume spike', 'price action', 'breakout',
+            'accumulation', 'distribution', 'whale',
+            # Token discussion
+            'token', 'coin', 'holder distribution',
+            # Narratives
             'ai', 'agent', 'meme', 'narrative', 'meta', 'trend',
             'rotation', 'catalyst', 'alpha',
             # Culture & sentiment
-            'degen', 'wagmi', 'ngmi', 'gm', 'anon', 'fren',
-            'bullish', 'bearish', 'fomo', 'paper hands',
+            'degen', 'wagmi', 'ngmi', 'gm', 'fren',
+            'bullish', 'bearish', 'fomo',
             # Safety/risk
-            'rug', 'scam', 'safe', 'legit', 'sus', 'red flag',
+            'rug', 'scam', 'safe', 'legit',
         ]
 
-        # SCORING SYSTEM (instead of binary)
+        # SCORING SYSTEM
         score = 0
 
-        # High-value signals are VERY valuable (weight: 3)
+        # High-value signals (weight: 3)
         if any(signal in text_lower for signal in high_value_signals):
             score += 3
 
@@ -321,10 +315,6 @@ class MentionHandler:
         # Bonus for numbers/percentages (indicates analysis)
         if any(char.isdigit() for char in tweet_text) and '%' in tweet_text:
             score += 2
-
-        # Bonus for ticker symbols (indicates token discussion)
-        if '$' in tweet_text and any(char.isupper() for char in tweet_text):
-            score += 1
 
         # Need minimum score of 3 to be worth learning
         return score >= 3

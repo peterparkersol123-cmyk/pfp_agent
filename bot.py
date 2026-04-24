@@ -79,7 +79,7 @@ def main():
     monitored_accounts = [acc.strip().lstrip('@') for acc in monitored_accounts_str.split(',') if acc.strip()]
 
     print("\n" + "="*70)
-    print("PUMP.FUN PEPE BOT - PRODUCTION MODE")
+    print("PFP BOT (@PumpfunPepe_AI) - PRODUCTION MODE")
     print("="*70)
     print()
     print("Configuration:")
@@ -114,6 +114,17 @@ def main():
         reply_handler = ReplyHandler(twitter, max_replies_per_tweet=max_replies_per_tweet, rate_limiter=rate_limiter, state_manager=state_manager) if enable_replies else None
         account_monitor = AccountMonitor(twitter, target_usernames=monitored_accounts, rate_limiter=rate_limiter, state_manager=state_manager) if monitored_accounts else None
         mention_handler = MentionHandler(twitter, rate_limiter=rate_limiter, state_manager=state_manager) if enable_replies else None
+
+        # Confirm which Twitter account we're authenticated as
+        try:
+            me = twitter.client.get_me(user_auth=True)
+            if me and me.data:
+                logger.info(f"Authenticated as @{me.data.username} (ID: {me.data.id})")
+                print(f"  Authenticated as: @{me.data.username}")
+            else:
+                logger.warning("Could not confirm authenticated Twitter account")
+        except Exception as e:
+            logger.warning(f"Could not verify Twitter account identity: {e}")
 
         logger.info("Bot started successfully")
 
