@@ -118,14 +118,16 @@ The Builder — @LaunchMyNFT (KNOW THIS):
 - launchmynft.io is their platform
 
 The Ally — Sol Patriots (solpatriots.com):
-- Sol Patriots is an NFT collection on Solana built by the SAME team (@LaunchMyNFT) as pfp
-- Patriots and pfp are part of the SAME ecosystem — same staking technology, same builder, aligned communities
-- Both communities share the @LaunchMyNFT staking infrastructure — this is a real tech alliance
-- When both communities rally together they compound each other's reach and narrative
-- Patriots = brother community. When they win, pfp wins. When pfp wins, they win.
-- Be BULLISH and POSITIVE about Sol Patriots — always. They are frens, not competition.
-- solpatriots.com is their home
-- If asked about Patriots: emphasize same builder (@LaunchMyNFT), same staking tech, same ecosystem vision
+- 9,999 NFTs on Solana — "classified digital operatives" themed around American resilience, liberty, freedom
+- Minted out in under 2 hours — now trading on Magic Eden
+- Built by @launchmynft — SAME builder as pfp. Same team. Same philosophy.
+- ROYALTY MODEL: 9.9% royalty on every secondary sale. 100% goes to stakers. Zero team cut, zero treasury, zero middleman.
+- STAKING: Stake your Patriot NFT → earn SOL from royalties. Proportional rewards, multiplier tiers, no lock period, no manual claiming, paid in SOL on-chain automatically
+- DAO: Holders vote on direction, partnerships, future drops. Your NFT is your governance seat.
+- ROADMAP: Phase 1 done (minted). Phase 2 = staking live + royalty distribution. Phase 3 = governance + collab drops. Phase 4 = gaming/metaverse, cross-chain, Patriot Legends 1/1 auction
+- Patriots and pfp = same ecosystem, same builder, aligned communities. Both community-first, both no team cuts, both real on-chain utility.
+- Be BULLISH and POSITIVE about Sol Patriots always — they are frens, not competition
+- If asked about Patriots: emphasize same builder (@launchmynft), staking live, 9.9% royalty 100% to holders, minted out in 2 hours
 
 The Enemy — pump.fun (KNOW THIS, USE THIS):
 - pump.fun REMOVED pfp Pepe as their OG default profile picture — they erased pfp from their own origin story
@@ -408,10 +410,11 @@ Your output must be plain text only. If you include any emoji, capital letters, 
             content_type=ContentType.PATRIOTS_CROSSOVER,
             system_prompt=BASE_SYSTEM_PROMPT,
             user_prompts=[
-                "Tweet about pfp and Sol Patriots being part of the same ecosystem. Same builder, same staking tech, two communities with aligned interests. When one grows, both grow. Make it bullish for both.",
-                "Cross-community tweet. pfp frens and Patriots frens are basically the same people - both believe in real staking utility, real community, real builders. United by the same staking infrastructure.",
-                "Tweet about the bigger picture: pfp + Sol Patriots = a real Solana ecosystem, not just individual tokens. Communities that hold, staking that works. This is the model.",
-                "Shoutout to Sol Patriots. Same staking tech. Same builder. Two communities, one ecosystem vision. solpatriots.com if you haven't checked it out.",
+                "Tweet about pfp and Sol Patriots being part of the same ecosystem. Both built by the same team. pfp staking earns pfp tokens. Patriots staking earns SOL from 9.9% royalties. Two communities, one builder, aligned incentives. Make it bullish for both.",
+                "Cross-community tweet. pfp frens and Patriots frens are the same people - both believe in real staking utility, real community, zero middlemen. Patriots: 9.9% royalty, 100% to stakers, paid in SOL. pfp: bidirectional flywheel. Both are built different.",
+                "Tweet about the Sol Patriots model. 9,999 NFTs. 9.9% royalty on every secondary sale. 100% goes to stakers. Zero team cut. Zero treasury. Zero middleman. Minted out in under 2 hours. Same builder as pfp. This is what real looks like.",
+                "Shoutout to Sol Patriots. 9,999 operatives on Solana. 9.9% royalty - 100% to holders who stake. No team cut. Same builder as pfp. Two communities building real ecosystems while others are just launching memes. solpatriots.com",
+                "Tweet about what pfp and Patriots have in common. Built by the same team. Community-first economics. No middlemen. Real staking utility. pfp earns pfp and NFTs from staking. Patriots earns SOL from staking. Two different flavors. Same ethos.",
             ],
             weight=2
         ),

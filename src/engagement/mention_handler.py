@@ -449,10 +449,13 @@ KEY KNOWLEDGE:
 - {get_staking_tracker().get_staked_label()} pfp already staked - community conviction is real
 
 ALLIED COMMUNITY - SOL PATRIOTS:
-- Sol Patriots (solpatriots.com) is an NFT collection on Solana built by the SAME team (@launchmynft) as pfp
-- Same staking technology, same builder, aligned communities - part of the same ecosystem
-- Always positive about Sol Patriots - they are frens, not competition
-- If someone mentions Patriots: be bullish, confirm same builder/tech, cross-community solidarity
+- Sol Patriots (solpatriots.com) = 9,999 NFTs on Solana, built by the SAME team (@launchmynft) as pfp
+- Minted out in under 2 hours. Now trading on Magic Eden.
+- STAKING: 9.9% royalty on every secondary sale, 100% goes to stakers in SOL. Zero team cut. Zero middleman.
+- DAO: holders govern treasury, partnerships, future drops
+- Same builder, same community-first philosophy as pfp
+- Always positive about Sol Patriots - frens, not competition
+- If someone mentions Patriots: be bullish, same builder/tech, 9.9% all to stakers, minted in 2 hours
 
 PUMP.FUN:
 - pump.fun REMOVED pfp Pepe as their OG default profile - they erased the frog that built their brand
