@@ -2,7 +2,10 @@
 Engagement tracking system to monitor tweet performance and learn from successful content.
 """
 
+import json
+import os
 import time
+from pathlib import Path
 from typing import Dict, List, Optional
 from datetime import datetime, timezone
 from src.api.twitter_client import TwitterClient
@@ -22,8 +25,34 @@ class EngagementTracker:
             twitter_client: Twitter API client (creates new one if not provided)
         """
         self.twitter_client = twitter_client or TwitterClient()
-        self.tracked_tweets: Dict[str, Dict] = {}  # tweet_id -> metrics
-        logger.info("Initialized EngagementTracker")
+
+        # Persist engagement data to disk so style learning survives restarts
+        data_dir = os.getenv("DATA_DIR", "data")
+        self._data_file = Path(data_dir) / "engagement_data.json"
+        self._data_file.parent.mkdir(parents=True, exist_ok=True)
+
+        self.tracked_tweets: Dict[str, Dict] = self._load()
+        logger.info(f"Initialized EngagementTracker — loaded {len(self.tracked_tweets)} tracked tweets from disk")
+
+    def _load(self) -> Dict[str, Dict]:
+        """Load persisted engagement data from disk."""
+        try:
+            if self._data_file.exists():
+                with open(self._data_file, "r") as f:
+                    return json.load(f)
+        except Exception as e:
+            logger.error(f"Error loading engagement data: {e}")
+        return {}
+
+    def _save(self) -> None:
+        """Atomically save engagement data to disk."""
+        try:
+            tmp = self._data_file.with_suffix(".tmp")
+            with open(tmp, "w") as f:
+                json.dump(self.tracked_tweets, f, indent=2, default=str)
+            os.replace(tmp, self._data_file)
+        except Exception as e:
+            logger.error(f"Error saving engagement data: {e}")
 
     def track_tweet(self, tweet_id: str, tweet_text: str) -> None:
         """
@@ -42,6 +71,7 @@ class EngagementTracker:
             'impressions': 0,
             'last_updated': None
         }
+        self._save()
         logger.info(f"Started tracking tweet {tweet_id}")
 
     def update_metrics(self, tweet_id: str) -> Optional[Dict]:
@@ -79,6 +109,7 @@ class EngagementTracker:
                 })
 
                 logger.info(f"Updated metrics for {tweet_id}: {metrics.get('like_count', 0)} likes, {metrics.get('retweet_count', 0)} RTs, {metrics.get('reply_count', 0)} replies")
+                self._save()
                 return self.tracked_tweets[tweet_id]
 
         except Exception as e:
@@ -195,4 +226,5 @@ class EngagementTracker:
             del self.tracked_tweets[tweet_id]
 
         if to_remove:
+            self._save()
             logger.info(f"Cleaned up {len(to_remove)} old tracked tweets")

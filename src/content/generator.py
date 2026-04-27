@@ -17,6 +17,7 @@ from src.utils.logger import get_logger
 from src.utils.helpers import random_choice_weighted
 from src.utils.price_mention_tracker import PriceMentionTracker
 from src.utils.staking_tracker import get_tracker as get_staking_tracker
+from src.config.settings import settings
 
 logger = get_logger(__name__)
 
@@ -57,10 +58,10 @@ class ContentGenerator:
         self.recent_tweets: List[str] = []
         self.recent_tweets_limit = 10
 
-        # Knowledge base for learned context
-        self.knowledge_file = Path("data/learned_context.jsonl")
+        # Knowledge base for learned context — must match settings.DATA_DIR used by MentionHandler
+        self.knowledge_file = settings.DATA_DIR / "learned_context.jsonl"
 
-        logger.info("Initialized ContentGenerator with Pump.fun data integration")
+        logger.info("Initialized ContentGenerator")
 
     def _build_ecosystem_context(self) -> str:
         """
@@ -73,7 +74,7 @@ class ContentGenerator:
             logger.debug("Fetching ecosystem data for context")
             context_data = self.pumpfun_client.get_context_for_content()
 
-            context_parts = ["Current Pump.fun ecosystem context:"]
+            context_parts = ["Current pfp ecosystem context:"]
 
             # Add live staking stats — rate-limited to once per 8 hours so the
             # bot doesn't hammer the same number in every single tweet
@@ -130,7 +131,7 @@ class ContentGenerator:
 
         except Exception as e:
             logger.error(f"Error building ecosystem context: {e}")
-            return "Current Pump.fun ecosystem: live data unavailable, use general knowledge"
+            return "Current pfp ecosystem: live data unavailable, use general knowledge"
 
     def _extract_insights_from_learnings(self, learnings: List[Dict]) -> Optional[str]:
         """
@@ -160,22 +161,22 @@ class ContentGenerator:
             conversations_text = "\n".join(conversations)
 
             # Ask Claude to extract insights
-            prompt = f"""You've been exposed to these recent tweets through conversations:
+            prompt = f"""You've been following these recent tweets from the community and monitored accounts:
 
 {conversations_text}
 
-Extract 2-3 KEY INSIGHTS or LEARNINGS from these tweets that would be valuable for a Pump.fun Pepe character to know. Focus on:
-- New tokens, narratives, or trends mentioned
-- Market sentiment or price action insights
-- Cultural shifts or memes emerging
-- Alpha or knowledge worth remembering
+Extract 2-3 KEY INSIGHTS or LEARNINGS from these tweets that PFP - the green frog community bot should know. Focus on:
+- What narratives, topics, or themes the community is excited about
+- Sentiment around pfp, solana, or the broader market
+- Cultural shifts, memes, or alpha worth remembering
+- What people are asking about or engaging with
 
 Format as bullet points, very concise (1 line each), in lowercase degen style.
-Example: "- traders rotating into ai agent tokens, narrative heating up"
+Example: "- community bullish on pfp staking flywheel, asking about nft rewards"
 
 Insights:"""
 
-            system_prompt = """You extract actionable insights from tweets. Be concise, focus on market-relevant information, trends, narratives, new tokens, or cultural shifts. Write in lowercase degen style."""
+            system_prompt = """You extract actionable insights from community tweets for the pfp community bot. Be concise, focus on what the community cares about, trending narratives, sentiment, and cultural shifts. Write in lowercase degen style."""
 
             insights = self.claude_client.generate_content(
                 prompt=prompt,
@@ -197,11 +198,9 @@ Insights:"""
 
     def _get_learned_context(self, limit: int = 5) -> Optional[str]:
         """
-        Get recent learned context from mentions/conversations.
-        Extracts INSIGHTS instead of raw tweets for better learning.
-
-        Args:
-            limit: Number of recent learnings to check
+        Get recent learned context from mentions and monitored account tweets.
+        Insights are extracted via Claude at most once per 4 hours and cached so
+        we don't burn an API call on every single tweet generation.
 
         Returns:
             Formatted learned insights or None
@@ -210,11 +209,28 @@ Insights:"""
             if not self.knowledge_file.exists():
                 return None
 
-            # Read recent learnings
+            # Cache file: stores extracted insights + the timestamp they were made
+            cache_file = settings.DATA_DIR / "insights_cache.json"
+            cache_ttl_hours = 4
+
+            # Check if we have a fresh cached result
+            if cache_file.exists():
+                try:
+                    with open(cache_file, "r") as f:
+                        cache = json.load(f)
+                    cached_at = datetime.fromisoformat(cache.get("cached_at", "2000-01-01"))
+                    age_hours = (datetime.now(timezone.utc) - cached_at.replace(tzinfo=timezone.utc)).total_seconds() / 3600
+                    if age_hours < cache_ttl_hours and cache.get("insights"):
+                        logger.debug(f"Using cached insights (age: {age_hours:.1f}h)")
+                        return f"RECENT COMMUNITY LEARNINGS:\n{cache['insights']}"
+                except Exception:
+                    pass  # Cache corrupted, rebuild below
+
+            # Read the last 30 entries from the knowledge file (mix of mentions + monitored accounts)
             learnings = []
             with open(self.knowledge_file, 'r') as f:
                 lines = f.readlines()
-                for line in lines[-20:]:  # Check last 20
+                for line in lines[-30:]:
                     try:
                         entry = json.loads(line.strip())
                         learnings.append(entry)
@@ -224,13 +240,23 @@ Insights:"""
             if not learnings:
                 return None
 
-            # Extract insights using Claude (smart learning)
+            # Extract insights using Claude — result cached for 4 hours
             insights = self._extract_insights_from_learnings(learnings)
 
             if insights:
-                formatted = f"RECENT LEARNINGS from community conversations:\n{insights}"
-                logger.debug(f"Loaded insights from {len(learnings)} conversations")
-                return formatted
+                # Save to cache
+                try:
+                    with open(cache_file, "w") as f:
+                        json.dump({
+                            "cached_at": datetime.now(timezone.utc).isoformat(),
+                            "insights": insights,
+                            "source_count": len(learnings)
+                        }, f)
+                except Exception:
+                    pass
+
+                logger.info(f"Refreshed insights cache from {len(learnings)} community entries")
+                return f"RECENT COMMUNITY LEARNINGS:\n{insights}"
 
             return None
 

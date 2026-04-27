@@ -2,7 +2,9 @@
 Monitor specific Twitter accounts and reply to their tweets.
 """
 
+import json
 import time
+from pathlib import Path
 from typing import List, Dict, Optional, Set
 from datetime import datetime, timezone, timedelta
 from src.api.twitter_client import TwitterClient
@@ -11,6 +13,7 @@ from src.utils.logger import get_logger
 from src.utils.rate_limiter import SharedReplyRateLimiter
 from src.utils.state_manager import BotStateManager
 from src.utils.staking_tracker import get_tracker as get_staking_tracker
+from src.config.settings import settings
 
 logger = get_logger(__name__)
 
@@ -47,6 +50,10 @@ class AccountMonitor:
             self.replied_tweet_ids: Set[str] = state_manager.replied_monitored_tweet_ids
         else:
             self.replied_tweet_ids: Set[str] = set()
+
+        # Knowledge base — same file ContentGenerator reads so learnings flow into tweets
+        self.knowledge_file = settings.DATA_DIR / "learned_context.jsonl"
+        self.knowledge_file.parent.mkdir(parents=True, exist_ok=True)
 
         logger.info(f"Initialized AccountMonitor for {len(self.target_usernames)} accounts")
 
@@ -111,6 +118,43 @@ class AccountMonitor:
         except Exception as e:
             logger.error(f"Error fetching tweets from @{username}: {e}")
             return []
+
+    def save_to_knowledge_base(self, tweet: Dict) -> None:
+        """
+        Save a monitored account's tweet to the shared knowledge base so the
+        content generator can learn from what influential accounts are saying.
+
+        Args:
+            tweet: Tweet dict with text and metadata
+        """
+        try:
+            text = tweet.get('text', '')
+
+            # Only save tweets with some substance
+            if len(text) < 30:
+                return
+
+            # Skip obvious spam/promo
+            text_lower = text.lower()
+            skip_patterns = ['dm me', 'click here', 'buy now', 'free mint', 'airdrop']
+            if any(p in text_lower for p in skip_patterns):
+                return
+
+            entry = {
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "category": "monitored_account",
+                "source": f"@{tweet['author_username']}",
+                "original_tweet": text,
+                "mention": "",
+            }
+
+            with open(self.knowledge_file, 'a') as f:
+                f.write(json.dumps(entry) + '\n')
+
+            logger.debug(f"Saved tweet from @{tweet['author_username']} to knowledge base")
+
+        except Exception as e:
+            logger.error(f"Error saving to knowledge base: {e}")
 
     def generate_reply(self, tweet: Dict) -> Optional[str]:
         """
@@ -279,6 +323,9 @@ If they mention pfp or the community - be EXTREMELY positive and supportive."""
 
                 # Reply to each tweet
                 for tweet in tweets:
+                    # Save tweet content to knowledge base so generator learns from it
+                    self.save_to_knowledge_base(tweet)
+
                     # Check rate limiter before generating/posting
                     if self.rate_limiter:
                         can_reply, reason = self.rate_limiter.can_reply()
