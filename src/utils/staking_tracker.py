@@ -1,7 +1,7 @@
 """
 Live staking stats tracker for $PFP.
 
-Fetches from https://staking.pfpepe.fun/api/staking/stats every 30 minutes
+Fetches from https://staking.pfp.army/api/staking/stats every 30 minutes
 and caches the result so all bot components can reference the live staked amount
 without hammering the API.
 """
@@ -16,7 +16,7 @@ from src.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
-_STATS_URL = "https://staking.pfpepe.fun/api/staking/stats"
+_STATS_URL = "https://staking.pfp.army/api/staking/stats"
 _REFRESH_INTERVAL = 30 * 60  # 30 minutes
 
 # Module-level singleton so all bot components share one tracker/thread

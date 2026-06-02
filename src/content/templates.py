@@ -69,7 +69,7 @@ About pfp (YOUR token and community):
 - IMPORTANT: All fees generated have been redirected to the CTO wallet - true community-driven tokenomics
 
 Official Website & Links (KNOW THIS):
-- Main website: https://www.pfpepe.fun/
+- Main website: https://pfp.army
 - Contract Address: 5TfqNKZbn9AnNtzq8bbkyhKgcPGTfNDc9wNzFrTBpump
 - The website has: PFP Generator, Copy Contract button, Join Community link
 - Tagline: "Every normie who makes an account starts here. The blank slate. The face of every beginning."
@@ -93,7 +93,7 @@ THE FLYWHEEL IS NOW LIVE AND BIDIRECTIONAL:
 - Built by @launchmynft - professional infrastructure, not some janky setup
 
 The Marketplace (ALSO LIVE - KNOW THIS):
-- NFT Marketplace is LIVE directly on PFpepe.fun website
+- NFT Marketplace is LIVE directly on pfp.army website
 - Buy/sell NFTs using SOL or ANY token - maximum accessibility
 - Can open up to other communities - pfp marketplace could host other projects
 - This is bigger than just pfp - the platform itself has utility now
@@ -424,11 +424,11 @@ Your output must be plain text only. If you include any emoji, capital letters, 
             content_type=ContentType.NFT_FLYWHEEL,
             system_prompt=BASE_SYSTEM_PROMPT,
             user_prompts=[
-                "Tweet about the pfp bidirectional flywheel. Stake NFTs → earn pfp. Stake pfp → earn NFTs. Both directions. Non-custodial. Live on pfpepe.fun. This is engineered compounding. Make it compelling.",
+                "Tweet about the pfp bidirectional flywheel. Stake NFTs → earn pfp. Stake pfp → earn NFTs. Both directions. Non-custodial. Live on pfp.army. This is engineered compounding. Make it compelling.",
                 "Tweet about pfp coin staking. Non-custodial means it stays in your wallet while it earns. Stake pfp → earn NFTs. No custody risk. Real passive income. The community built this.",
                 "Tweet about passive income from pfp NFT staking. Hold OG or Gen2 NFTs, stake them, earn pfp every second. While you sleep. While you eat. While you argue on CT. Non-custodial - your wallet, your keys.",
                 "Break down the pfp flywheel. CTO wallet fees → buy pfp → staking rewards → NFT stakers earn pfp → pfp stakers earn NFTs → loop. Both directions. This compounds forever.",
-                "Tweet about the pfp marketplace on pfpepe.fun. Buy/sell NFTs with SOL or ANY token. Can open to other communities. The platform has real utility now - not just pfp ecosystem, potentially multi-community.",
+                "Tweet about the pfp marketplace on pfp.army. Buy/sell NFTs with SOL or ANY token. Can open to other communities. The platform has real utility now - not just pfp ecosystem, potentially multi-community.",
                 "Tweet about the pfp OG and Gen2 NFT collections. Not just jpegs - stake them, earn pfp every second, non-custodial. Culture meets utility. Built by @launchmynft.",
                 "Degen philosophy tweet about the two-way staking. Most tokens: hold and hope. pfp: stake NFTs earn tokens, stake tokens earn NFTs. The flywheel spins in both directions. Ngmi if you're not in.",
                 "Tweet about the CTO wallet mechanics + flywheel combo. Fees → buy pfp → staking pool → both staker types benefit. No single dev taking cuts. Pure community engine.",

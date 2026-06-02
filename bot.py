@@ -42,7 +42,10 @@ def mention_monitoring_loop(mention_handler, check_interval_minutes=5, stop_even
     while not (stop_event and stop_event.is_set()):
         try:
             logger.debug("Mention monitor: Checking for new mentions...")
-            mentions_replied = mention_handler.handle_mentions(look_back_minutes=check_interval_minutes + 2)
+            # Use at least 120 min look-back so mentions aren't missed after restarts.
+            # replied_mention_ids prevents double-replies.
+            look_back = max(check_interval_minutes * 2 + 5, 120)
+            mentions_replied = mention_handler.handle_mentions(look_back_minutes=look_back)
 
             if mentions_replied > 0:
                 logger.info(f"Mention monitor: Replied to {mentions_replied} mentions")
@@ -67,11 +70,11 @@ def main():
     """Run the production bot."""
 
     # Get configuration from environment
-    post_interval_minutes = int(os.getenv('POST_INTERVAL_MINUTES', '300'))
+    post_interval_minutes = int(os.getenv('POST_INTERVAL_MINUTES', '1440'))
     post_interval_seconds = post_interval_minutes * 60
     enable_replies = os.getenv('ENABLE_REPLY_SYSTEM', 'True').lower() == 'true'
-    max_replies_per_tweet = int(os.getenv('MAX_REPLIES_PER_TWEET', '2'))
-    max_total_replies_per_hour = int(os.getenv('MAX_TOTAL_REPLIES_PER_HOUR', '5'))
+    max_replies_per_tweet = int(os.getenv('MAX_REPLIES_PER_TWEET', '3'))
+    max_total_replies_per_hour = int(os.getenv('MAX_TOTAL_REPLIES_PER_HOUR', '20'))
     mention_check_interval = int(os.getenv('MENTION_CHECK_INTERVAL_MINUTES', '5'))
 
     # Get monitored accounts (comma-separated usernames)
