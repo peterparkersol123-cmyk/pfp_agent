@@ -66,6 +66,50 @@ def mention_monitoring_loop(mention_handler, check_interval_minutes=5, stop_even
     logger.info("Mention monitoring thread stopped")
 
 
+def milestone_monitoring_loop(watcher, generator, twitter, engagement_tracker,
+                              check_interval_minutes=20, stop_event=None):
+    """
+    Watch on-chain stats and tweet when a real milestone fires
+    (staking thresholds, whale stakes, holder growth, price pumps).
+
+    Detection is free (cached data) — Claude is only called when a
+    milestone actually fires, and the watcher caps milestone tweets
+    at 3/day with a 3h minimum gap.
+    """
+    logger.info(f"Started milestone monitoring thread (checking every {check_interval_minutes} minutes)")
+
+    while not (stop_event and stop_event.is_set()):
+        try:
+            event = watcher.check()
+            if event:
+                logger.info(f"Milestone event: {event['headline']} — generating tweet")
+                tweet = generator.generate_tweet(custom_prompt=event["prompt"], use_live_data=False)
+                if tweet:
+                    result = twitter.post_tweet(tweet)
+                    if result:
+                        tweet_id = result.get("id")
+                        watcher.record_posted()
+                        engagement_tracker.track_tweet(tweet_id, tweet, content_type="milestone")
+                        logger.info(f"✓ Posted milestone tweet ({event['type']}): {tweet[:60]}...")
+                        print(f"\n  ⚡ MILESTONE TWEET POSTED ({event['headline']}): {tweet[:80]}")
+                    else:
+                        logger.error("Failed to post milestone tweet")
+                else:
+                    logger.warning("Failed to generate milestone tweet")
+
+            # Wait before next check
+            for _ in range(check_interval_minutes * 60):
+                if stop_event and stop_event.is_set():
+                    break
+                time.sleep(1)
+
+        except Exception as e:
+            logger.error(f"Error in milestone monitoring loop: {e}", exc_info=True)
+            time.sleep(60)
+
+    logger.info("Milestone monitoring thread stopped")
+
+
 def main():
     """Run the production bot."""
 
@@ -76,6 +120,8 @@ def main():
     max_replies_per_tweet = int(os.getenv('MAX_REPLIES_PER_TWEET', '3'))
     max_total_replies_per_hour = int(os.getenv('MAX_TOTAL_REPLIES_PER_HOUR', '20'))
     mention_check_interval = int(os.getenv('MENTION_CHECK_INTERVAL_MINUTES', '5'))
+    enable_milestones = os.getenv('ENABLE_MILESTONE_TWEETS', 'True').lower() == 'true'
+    milestone_check_interval = int(os.getenv('MILESTONE_CHECK_INTERVAL_MINUTES', '20'))
 
     # Get monitored accounts (comma-separated usernames)
     monitored_accounts_str = os.getenv('MONITORED_ACCOUNTS', '')
@@ -92,6 +138,7 @@ def main():
     print(f"  Max Replies Per Tweet: {max_replies_per_tweet}")
     print(f"  Max Total Replies Per Hour: {max_total_replies_per_hour} (combined mentions + comments)")
     print(f"  Mention Monitoring: {'Async (every ' + str(mention_check_interval) + ' min)' if enable_replies else 'Disabled'}")
+    print(f"  Milestone Tweets: {'Enabled (every ' + str(milestone_check_interval) + ' min, max 3/day)' if enable_milestones else 'Disabled'}")
     print(f"  Monitored Accounts: {len(monitored_accounts)} accounts")
     if monitored_accounts:
         for acc in monitored_accounts:
@@ -100,6 +147,12 @@ def main():
     print("Starting bot...")
     print("Press Ctrl+C to stop")
     print()
+
+    # Defined before the try so the finally block can reference them safely
+    # even if component initialization fails
+    stop_event = threading.Event()
+    mention_thread = None
+    milestone_thread = None
 
     # Initialize components
     try:
@@ -132,8 +185,6 @@ def main():
         logger.info("Bot started successfully")
 
         # Start async mention monitoring thread
-        stop_event = threading.Event()
-        mention_thread = None
         if mention_handler:
             mention_thread = threading.Thread(
                 target=mention_monitoring_loop,
@@ -143,6 +194,20 @@ def main():
             )
             mention_thread.start()
             logger.info("Started async mention monitoring thread")
+
+        # Start async milestone monitoring thread (on-chain event tweets)
+        if enable_milestones:
+            from src.utils.milestone_watcher import MilestoneWatcher
+            milestone_watcher = MilestoneWatcher()
+            milestone_thread = threading.Thread(
+                target=milestone_monitoring_loop,
+                args=(milestone_watcher, generator, twitter, engagement_tracker,
+                      milestone_check_interval, stop_event),
+                daemon=True,
+                name="MilestoneMonitor"
+            )
+            milestone_thread.start()
+            logger.info("Started async milestone monitoring thread")
 
         tweet_count = 0
         # Restore recent tweets from persisted state so reply checking resumes after restart
@@ -292,12 +357,16 @@ def main():
         return 1
 
     finally:
-        # Stop mention monitoring thread
+        # Stop background monitoring threads
+        stop_event.set()
         if mention_thread and mention_thread.is_alive():
             logger.info("Stopping mention monitoring thread...")
-            stop_event.set()
             mention_thread.join(timeout=5)
             logger.info("Mention monitoring thread stopped")
+        if milestone_thread and milestone_thread.is_alive():
+            logger.info("Stopping milestone monitoring thread...")
+            milestone_thread.join(timeout=5)
+            logger.info("Milestone monitoring thread stopped")
 
     print()
     print("="*70)
