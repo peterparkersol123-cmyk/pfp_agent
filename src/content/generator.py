@@ -18,6 +18,7 @@ from src.utils.helpers import random_choice_weighted
 from src.utils.price_mention_tracker import PriceMentionTracker
 from src.utils.staking_tracker import get_tracker as get_staking_tracker
 from src.config.settings import settings
+from src.config.knowledge import get_extra_facts
 
 logger = get_logger(__name__)
 
@@ -50,6 +51,10 @@ class ContentGenerator:
         # Track recent content types for variety
         self.recent_topics: List[ContentType] = []
         self.topic_history_size = topic_history_size
+
+        # Content type of the most recently generated tweet — bot.py reads
+        # this to tag the tweet in the engagement tracker for topic learning
+        self.last_content_type: Optional[str] = None
 
         # Track when "gm" was last used (date only, UTC)
         self.last_gm_date: Optional[str] = None
@@ -182,7 +187,8 @@ Insights:"""
                 prompt=prompt,
                 system_prompt=system_prompt,
                 max_tokens=150,
-                temperature=0.7
+                temperature=0.7,
+                use_small_model=True  # Insight extraction doesn't need the big model
             )
 
             if insights:
@@ -294,7 +300,7 @@ Insights:"""
                     system_prompt = self.templates.BASE_SYSTEM_PROMPT
                     user_prompt = custom_prompt
                 else:
-                    template = self._select_template(content_type)
+                    template = self._select_template(content_type, engagement_tracker=engagement_tracker)
                     system_prompt = template.system_prompt
                     user_prompt = random.choice(template.user_prompts)
 
@@ -321,6 +327,11 @@ Insights:"""
                     learned_context = self._get_learned_context(limit=3)
                     if learned_context:
                         user_prompt = f"{user_prompt}\n\n{learned_context}"
+
+                    # Add operator-taught facts (hot-teachable, no redeploy needed)
+                    extra_facts = get_extra_facts()
+                    if extra_facts:
+                        user_prompt = f"{user_prompt}\n\n{extra_facts}"
 
                 logger.debug(f"Using content type: {template.content_type.value if not custom_prompt else 'custom'}")
 
@@ -367,18 +378,24 @@ Insights:"""
                 is_valid, errors = self.validator.validate(content)
 
                 if is_valid:
-                    # Self-critique before accepting
+                    # Self-critique before accepting.
+                    # Cost cap: demand 8/10 early, but accept 7/10 after a few
+                    # attempts so we don't burn endless API calls chasing perfection.
                     score, feedback = self.critic.critique_tweet(content)
+                    required_score = 8 if attempt < 4 else 7
 
-                    if score < 8:
-                        logger.warning(f"Tweet scored {score}/10, regenerating. Feedback: {feedback[:100]}")
+                    if score < required_score:
+                        logger.warning(f"Tweet scored {score}/10 (need {required_score}), regenerating. Feedback: {feedback[:100]}")
                         continue  # Try again
 
                     logger.info(f"Tweet approved with score {score}/10")
                     logger.info(f"Successfully generated valid tweet: {content[:50]}...")
-                    # Track this topic for variety
+                    # Track this topic for variety + expose it for engagement learning
                     if not custom_prompt:
                         self._track_topic(template.content_type)
+                        self.last_content_type = template.content_type.value
+                    else:
+                        self.last_content_type = "custom"
                     # Update last gm date if content contains gm
                     if self._contains_gm(content):
                         self.last_gm_date = datetime.now(timezone.utc).strftime('%Y-%m-%d')
@@ -759,13 +776,20 @@ Make it Pepe-style: cheeky, smart, observant. Comment on the token naturally."""
             self.recent_topics.pop(0)
         logger.debug(f"Tracked topic: {content_type.value}. Recent: {[t.value for t in self.recent_topics]}")
 
-    def _select_template(self, content_type: Optional[ContentType] = None) -> ContentTemplate:
+    def _select_template(
+        self,
+        content_type: Optional[ContentType] = None,
+        engagement_tracker=None
+    ) -> ContentTemplate:
         """
         Select a template, either specific type or weighted random.
-        Avoids recently used topics for variety.
+        Avoids recently used topics for variety, and weights selection by
+        historical engagement per content type (topics that perform get
+        picked more, topics that flop get picked less).
 
         Args:
             content_type: Specific content type to use
+            engagement_tracker: Optional EngagementTracker for performance weighting
 
         Returns:
             Selected template
@@ -775,6 +799,24 @@ Make it Pepe-style: cheeky, smart, observant. Comment on the token naturally."""
 
         # Weighted random selection with topic variety
         weighted_templates = self.templates.get_weighted_templates()
+
+        # Engagement learning: scale base weights by how each content type
+        # has actually performed (no API cost — uses cached metrics)
+        if engagement_tracker:
+            try:
+                multipliers = engagement_tracker.get_content_type_multipliers()
+                if multipliers:
+                    weighted_templates = [
+                        {
+                            **wt,
+                            "weight": wt["weight"] * multipliers.get(
+                                wt["template"].content_type.value, 1.0
+                            ),
+                        }
+                        for wt in weighted_templates
+                    ]
+            except Exception as e:
+                logger.warning(f"Could not apply engagement weighting: {e}")
 
         # Filter out recently used topics if we have history
         if len(self.recent_topics) >= 2:

@@ -66,6 +66,8 @@ class BotStateManager:
         self.replied_own_tweet_ids: Set[str] = set(state.get("replied_own_tweet_ids", []))
         self.replied_monitored_tweet_ids: Set[str] = set(state.get("replied_monitored_tweet_ids", []))
         self.recent_tweets: List[Dict] = state.get("recent_tweets", [])
+        # username (lowercase) -> {"count": int, "last_text": str, "last_at": iso str}
+        self.user_interactions: Dict[str, Dict] = state.get("user_interactions", {})
 
         logger.info(
             f"Loaded bot state from {self.state_file}: "
@@ -100,6 +102,7 @@ class BotStateManager:
                 "replied_own_tweet_ids": list(self.replied_own_tweet_ids),
                 "replied_monitored_tweet_ids": list(self.replied_monitored_tweet_ids),
                 "recent_tweets": self.recent_tweets[-10:],
+                "user_interactions": self.user_interactions,
                 "last_saved": datetime.now(timezone.utc).isoformat(),
             }
             tmp_path = self.state_file.with_suffix(".tmp")
@@ -142,6 +145,29 @@ class BotStateManager:
         """Record that we replied to a monitored account's tweet."""
         self.replied_monitored_tweet_ids.add(tweet_id)
         self._save()
+
+    # -------------------------------------------------------------------------
+    # Per-user interaction memory (returning frens)
+    # -------------------------------------------------------------------------
+
+    def record_user_interaction(self, username: str, text: str):
+        """Remember that we interacted with this user and what they said."""
+        key = username.lower().lstrip("@")
+        entry = self.user_interactions.get(key, {"count": 0})
+        entry["count"] = entry.get("count", 0) + 1
+        entry["last_text"] = text[:140]
+        entry["last_at"] = datetime.now(timezone.utc).isoformat()
+        self.user_interactions[key] = entry
+        # Cap memory size — keep the 500 most recently seen users
+        if len(self.user_interactions) > 500:
+            oldest = sorted(self.user_interactions.items(), key=lambda kv: kv[1].get("last_at", ""))
+            for k, _ in oldest[: len(self.user_interactions) - 500]:
+                del self.user_interactions[k]
+        self._save()
+
+    def get_user_history(self, username: str) -> Optional[Dict]:
+        """Return interaction history for a user, or None if first contact."""
+        return self.user_interactions.get(username.lower().lstrip("@"))
 
     # -------------------------------------------------------------------------
     # Recent tweets cache (bot.py main loop)

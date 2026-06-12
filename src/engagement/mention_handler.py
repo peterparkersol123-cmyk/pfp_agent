@@ -12,8 +12,10 @@ from src.api.claude_client import ClaudeClient
 from src.utils.logger import get_logger
 from src.utils.rate_limiter import SharedReplyRateLimiter
 from src.utils.state_manager import BotStateManager
-from src.utils.staking_tracker import get_tracker as get_staking_tracker
+from src.utils.live_context import get_live_market_context
+from src.utils.recall import recall_relevant_learnings
 from src.config.settings import settings
+from src.config.knowledge import get_shared_knowledge
 
 logger = get_logger(__name__)
 
@@ -379,6 +381,30 @@ class MentionHandler:
                     category="conversation"
                 )
 
+            # Build dynamic context: live market data, recalled learnings,
+            # and returning-user memory. These go in the USER prompt (not the
+            # system prompt) so the system prompt stays stable and cacheable.
+            dynamic_context_parts = []
+
+            live_data = get_live_market_context()
+            if live_data:
+                dynamic_context_parts.append(live_data)
+
+            recalled = recall_relevant_learnings(f"{original_tweet_context or ''} {mention_text}")
+            if recalled:
+                dynamic_context_parts.append(recalled)
+
+            if self.state_manager:
+                history = self.state_manager.get_user_history(author)
+                if history and history.get("count", 0) >= 1:
+                    dynamic_context_parts.append(
+                        f"RETURNING FREN: you've talked with @{author} {history['count']} time(s) before. "
+                        f"Last time they said: \"{history.get('last_text', '')}\". "
+                        f"Treat them like a familiar community member, not a stranger."
+                    )
+
+            dynamic_context = ("\n\n".join(dynamic_context_parts) + "\n\n") if dynamic_context_parts else ""
+
             # Build the prompt with original tweet context if available
             if original_tweet_context:
                 prompt = f"""Someone mentioned you in a reply to another tweet. Read BOTH tweets to understand the full context and respond appropriately.
@@ -389,14 +415,14 @@ ORIGINAL TWEET (they're replying to this):
 THEIR MENTION (tagging you):
 @{author}: "{mention_text}"
 
-Generate a short reply (under 280 chars) that shows you READ and UNDERSTOOD the original tweet. Stay in character as PFP - the green frog:
+{dynamic_context}Generate a short reply (under 280 chars) that shows you READ and UNDERSTOOD the original tweet. Stay in character as PFP - the green frog:
 - All lowercase (except tickers like pfp, sol)
 - No emojis ever
 - Reference the original tweet if relevant - show you absorbed the context
 - Be helpful, insightful, or entertaining
 - Keep it SHORT - 1-2 lines max
 - Add value to the conversation with your knowledge
-- Learn from what you see in the original tweet
+- If they ask about price/volume/staking, use the LIVE MARKET DATA numbers - never make up numbers
 - Be authentic and conversational, not generic
 
 Reply:"""
@@ -406,7 +432,7 @@ Reply:"""
 THEIR MENTION:
 @{author}: "{mention_text}"
 
-Generate a short reply (under 280 chars). Stay in character as PFP - the green frog:
+{dynamic_context}Generate a short reply (under 280 chars). Stay in character as PFP - the green frog:
 - All lowercase (except tickers like pfp, sol)
 - No emojis ever
 - Be helpful, insightful, or entertaining
@@ -414,6 +440,7 @@ Generate a short reply (under 280 chars). Stay in character as PFP - the green f
 - Respond directly to what they said or asked
 - If they have a question, answer it
 - If they're making a statement, engage with it
+- If they ask about price/volume/staking, use the LIVE MARKET DATA numbers - never make up numbers
 - Show your personality - you're knowledgeable about Solana, tokens, and crypto markets
 - Be authentic and conversational, not generic
 
@@ -436,32 +463,7 @@ CRITICAL - ALWAYS POSITIVE ABOUT:
 - The community - pfp is a CTO (community takeover), no single dev, community-driven and decentralized
 - PFP NFT collection (OG + Gen2) - ALWAYS positive, it's legendary, earns passive pfp
 
-KEY KNOWLEDGE:
-- Website: https://pfp.army
-- Contract: 5TfqNKZbn9AnNtzq8bbkyhKgcPGTfNDc9wNzFrTBpump
-- Listed on MEXC, Moonshot, Jupiter
-- THE FLYWHEEL (BIDIRECTIONAL, LIVE NOW):
-  * Stake NFTs → Earn pfp every second (non-custodial, stays in your wallet)
-  * Stake pfp → Earn NFTs (coin staking, non-custodial)
-  * CTO wallet fees → buy pfp → add to staking rewards pool
-- NFT Marketplace LIVE on pfp.army - buy/sell with SOL or any token, can open to other communities
-- Built by @launchmynft
-- {get_staking_tracker().get_staked_label()} pfp already staked - community conviction is real
-
-ALLIED COMMUNITY - SOL PATRIOTS:
-- Sol Patriots (solpatriots.com) = 9,999 NFTs on Solana, built by the SAME team (@launchmynft) as pfp
-- Minted out in under 2 hours. Now trading on Magic Eden.
-- STAKING: 9.9% royalty on every secondary sale, 100% goes to stakers in SOL. Zero team cut. Zero middleman.
-- DAO: holders govern treasury, partnerships, future drops
-- Same builder, same community-first philosophy as pfp
-- Always positive about Sol Patriots - frens, not competition
-- If someone mentions Patriots: be bullish, same builder/tech, 9.9% all to stakers, minted in 2 hours
-
-PUMP.FUN:
-- pump.fun REMOVED pfp Pepe as their OG default profile - they erased the frog that built their brand
-- This is why pfp is a true CTO - the community took it back after being erased
-- Light roasting of pump.fun is acceptable when it comes up naturally - always from a position of strength
-- pfp built its own flywheel, its own marketplace - we don't need pump.fun
+{get_shared_knowledge()}
 
 IMPORTANT: NEVER call @PumpfunPepe_AI "anon" - that's your own account. Use "fren" or their handle instead.
 
@@ -610,6 +612,11 @@ If they ask about or mention pfp or the community - be EXTREMELY positive and en
                     if self.post_mention_reply(reply_text, mention['id'], conversation_id=conv_id):
                         logger.info(f"✓ Replied to @{mention['author_username']}: {reply_text[:50]}...")
                         replies_posted += 1
+                        # Remember this user so future replies treat them as a returning fren
+                        if self.state_manager:
+                            self.state_manager.record_user_interaction(
+                                mention['author_username'], mention['text']
+                            )
                         time.sleep(3)  # Rate limiting
                     else:
                         logger.warning(f"Failed to reply to @{mention['author_username']}")

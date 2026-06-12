@@ -1,6 +1,12 @@
 """
 Claude API client for content generation.
 Handles communication with Anthropic's Claude API.
+
+Cost controls:
+- System prompts are sent with cache_control so repeated calls within the
+  5-minute cache window pay ~10% of normal input cost.
+- Callers can pass use_small_model=True to route low-stakes calls
+  (critique, insight extraction) to the cheaper Haiku model.
 """
 
 import time
@@ -26,10 +32,11 @@ class ClaudeClient:
         self.api_key = api_key or settings.ANTHROPIC_API_KEY
         self.client = Anthropic(api_key=self.api_key)
         self.model = settings.CLAUDE_MODEL
+        self.small_model = settings.CLAUDE_SMALL_MODEL
         self.max_tokens = settings.CLAUDE_MAX_TOKENS
         self.temperature = settings.CLAUDE_TEMPERATURE
 
-        logger.info(f"Initialized Claude client with model: {self.model}")
+        logger.info(f"Initialized Claude client (main: {self.model}, small: {self.small_model})")
 
     def generate_content(
         self,
@@ -37,7 +44,8 @@ class ClaudeClient:
         system_prompt: Optional[str] = None,
         max_tokens: Optional[int] = None,
         temperature: Optional[float] = None,
-        max_retries: int = 5
+        max_retries: int = 5,
+        use_small_model: bool = False
     ) -> Optional[str]:
         """
         Generate content using Claude API.
@@ -48,29 +56,41 @@ class ClaudeClient:
             max_tokens: Maximum tokens to generate
             temperature: Sampling temperature (0-1)
             max_retries: Maximum number of retry attempts
+            use_small_model: Route to the cheaper Haiku model (for critique,
+                insight extraction, and other low-stakes internal calls)
 
         Returns:
             Generated content or None if failed
         """
         max_tokens = max_tokens or self.max_tokens
         temperature = temperature or self.temperature
+        model = self.small_model if use_small_model else self.model
 
         for attempt in range(max_retries):
             try:
-                logger.debug(f"Generating content (attempt {attempt + 1}/{max_retries})")
+                logger.debug(f"Generating content (attempt {attempt + 1}/{max_retries}, model: {model})")
 
                 messages = [{"role": "user", "content": prompt}]
 
                 # Build API call parameters
                 api_params = {
-                    "model": self.model,
+                    "model": model,
                     "max_tokens": max_tokens,
                     "temperature": temperature,
                     "messages": messages
                 }
 
                 if system_prompt:
-                    api_params["system"] = system_prompt
+                    # cache_control: repeated calls with the same system prompt
+                    # within 5 min hit the prompt cache (~90% input cost saving).
+                    # Reply bursts and regeneration loops benefit the most.
+                    api_params["system"] = [
+                        {
+                            "type": "text",
+                            "text": system_prompt,
+                            "cache_control": {"type": "ephemeral"}
+                        }
+                    ]
 
                 # Make API call
                 response = self.client.messages.create(**api_params)
@@ -163,7 +183,13 @@ class ClaudeClient:
             }
 
             if system_prompt:
-                api_params["system"] = system_prompt
+                api_params["system"] = [
+                    {
+                        "type": "text",
+                        "text": system_prompt,
+                        "cache_control": {"type": "ephemeral"}
+                    }
+                ]
 
             # Make streaming API call
             content_chunks = []
@@ -193,7 +219,8 @@ class ClaudeClient:
             response = self.generate_content(
                 prompt="Say 'Hello' in one word.",
                 max_tokens=10,
-                temperature=0
+                temperature=0,
+                use_small_model=True
             )
             if response:
                 logger.info("Claude API connection successful")

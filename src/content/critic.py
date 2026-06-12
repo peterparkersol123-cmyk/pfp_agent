@@ -77,7 +77,8 @@ You approve:
                 prompt=prompt,
                 system_prompt=system_prompt,
                 max_tokens=100,
-                temperature=0.3  # Lower temp for consistent critique
+                temperature=0.3,  # Lower temp for consistent critique
+                use_small_model=True  # Critique doesn't need the big model
             )
 
             if not response:

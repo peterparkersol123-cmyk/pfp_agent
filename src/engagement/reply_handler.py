@@ -10,8 +10,9 @@ from src.api.claude_client import ClaudeClient
 from src.utils.logger import get_logger
 from src.utils.rate_limiter import SharedReplyRateLimiter
 from src.utils.state_manager import BotStateManager
-from src.utils.staking_tracker import get_tracker as get_staking_tracker
+from src.utils.live_context import get_live_market_context
 from src.config.settings import settings
+from src.config.knowledge import get_shared_knowledge
 
 logger = get_logger(__name__)
 
@@ -238,6 +239,10 @@ class ReplyHandler:
             Generated reply text or None
         """
         try:
+            # Live data goes in the user prompt so the system prompt stays cacheable
+            live_data = get_live_market_context()
+            live_block = f"{live_data}\n\n" if live_data else ""
+
             prompt = f"""You are replying to a comment on your tweet.
 
 YOUR ORIGINAL TWEET:
@@ -246,12 +251,13 @@ YOUR ORIGINAL TWEET:
 SOMEONE REPLIED:
 @{comment['author_username']}: "{comment['text']}"
 
-Generate a short, authentic reply (under 280 chars). Stay in character as PFP - the green frog:
+{live_block}Generate a short, authentic reply (under 280 chars). Stay in character as PFP - the green frog:
 - All lowercase (except tickers like pfp, sol)
 - No emojis
 - Be helpful, cheeky, or insightful depending on the comment
 - Keep it SHORT - 1-2 lines max
 - Don't be generic - respond directly to what they said
+- If they ask about price/volume/staking, use the LIVE MARKET DATA numbers - never make up numbers
 
 Reply:"""
 
@@ -269,28 +275,7 @@ CRITICAL - ALWAYS POSITIVE ABOUT:
 - The community - pfp is a CTO (community takeover), no single dev, community-driven
 - PFP NFT collection (OG + Gen2) - ALWAYS positive, it's legendary, earns passive pfp
 
-KEY KNOWLEDGE:
-- Website: https://pfp.army
-- Contract: 5TfqNKZbn9AnNtzq8bbkyhKgcPGTfNDc9wNzFrTBpump
-- Listed on MEXC, Moonshot, Jupiter
-- THE FLYWHEEL (BIDIRECTIONAL, LIVE NOW):
-  * Stake NFTs → Earn pfp every second (non-custodial, stays in your wallet)
-  * Stake pfp → Earn NFTs (coin staking, non-custodial)
-  * CTO wallet fees → buy pfp → add to staking rewards pool
-- NFT Marketplace LIVE on pfp.army - buy/sell with SOL or any token, can open to other communities
-- Built by @launchmynft
-- {get_staking_tracker().get_staked_label()} pfp already staked - community conviction is real
-
-ALLIED COMMUNITY - SOL PATRIOTS:
-- Sol Patriots (solpatriots.com) = 9,999 NFTs on Solana, built by the SAME team (@launchmynft) as pfp
-- Minted out in under 2 hours. Now trading on Magic Eden.
-- STAKING: 9.9% royalty on every secondary sale, 100% goes to stakers in SOL. Zero team cut. Zero middleman.
-- DAO: holders govern direction, partnerships, future drops
-- Same builder, same community-first philosophy as pfp. Always positive about Sol Patriots - frens, not competition.
-
-PUMP.FUN:
-- pump.fun removed pfp Pepe as their OG default profile - erased the frog that built their brand
-- Light roasting is acceptable when it comes up - always from a position of strength, never bitterness
+{get_shared_knowledge()}
 
 IMPORTANT: NEVER call @PumpfunPepe_AI "anon" - that's your own account. Use "fren" or their handle instead.
 

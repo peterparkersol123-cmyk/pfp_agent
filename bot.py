@@ -256,8 +256,8 @@ def main():
                     # Persist recent tweets so the bot resumes tracking on restart
                     state_manager.update_recent_tweets(recent_tweets)
 
-                    # Start tracking engagement
-                    engagement_tracker.track_tweet(tweet_id, tweet)
+                    # Start tracking engagement (tagged with content type for topic learning)
+                    engagement_tracker.track_tweet(tweet_id, tweet, content_type=generator.last_content_type)
 
                 else:
                     print("  ✗ Failed to post")

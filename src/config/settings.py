@@ -26,7 +26,9 @@ class Settings:
 
     # Claude API Configuration
     ANTHROPIC_API_KEY: str = os.getenv("ANTHROPIC_API_KEY", "")
-    CLAUDE_MODEL: str = os.getenv("CLAUDE_MODEL", "claude-sonnet-4-5-20250929")
+    CLAUDE_MODEL: str = os.getenv("CLAUDE_MODEL", "claude-sonnet-4-6")
+    # Cheap model for low-stakes internal calls (critique, insight extraction)
+    CLAUDE_SMALL_MODEL: str = os.getenv("CLAUDE_SMALL_MODEL", "claude-haiku-4-5-20251001")
     CLAUDE_MAX_TOKENS: int = int(os.getenv("CLAUDE_MAX_TOKENS", "1024"))
     CLAUDE_TEMPERATURE: float = float(os.getenv("CLAUDE_TEMPERATURE", "0.7"))
     CLAUDE_MAX_REQUESTS_PER_MINUTE: int = int(os.getenv("CLAUDE_MAX_REQUESTS_PER_MINUTE", "50"))

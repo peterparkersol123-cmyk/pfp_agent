@@ -54,16 +54,19 @@ class EngagementTracker:
         except Exception as e:
             logger.error(f"Error saving engagement data: {e}")
 
-    def track_tweet(self, tweet_id: str, tweet_text: str) -> None:
+    def track_tweet(self, tweet_id: str, tweet_text: str, content_type: Optional[str] = None) -> None:
         """
         Start tracking a tweet's engagement.
 
         Args:
             tweet_id: Twitter tweet ID
             tweet_text: Full text of the tweet
+            content_type: ContentType value the tweet was generated from
+                (enables per-topic performance learning)
         """
         self.tracked_tweets[tweet_id] = {
             'text': tweet_text,
+            'content_type': content_type,
             'created_at': datetime.now(timezone.utc).isoformat(),
             'likes': 0,
             'retweets': 0,
@@ -72,7 +75,7 @@ class EngagementTracker:
             'last_updated': None
         }
         self._save()
-        logger.info(f"Started tracking tweet {tweet_id}")
+        logger.info(f"Started tracking tweet {tweet_id} (type: {content_type})")
 
     def update_metrics(self, tweet_id: str) -> Optional[Dict]:
         """
@@ -187,6 +190,48 @@ class EngagementTracker:
             patterns.append(f"{i}. (score: {score:.0f}) \"{text}...\"")
 
         return "\n".join(patterns)
+
+    def get_content_type_multipliers(self) -> Dict[str, float]:
+        """
+        Learn which content types perform: compute a weight multiplier per
+        content type based on average engagement vs the overall average.
+
+        Multipliers are clamped to [0.5, 2.0] so no topic ever fully dies
+        or completely dominates. Types with fewer than 2 tracked tweets get
+        no adjustment (not enough signal).
+
+        Returns:
+            Dict of content_type value -> multiplier. Empty if not enough data.
+        """
+        # Group scores by content type (uses cached metrics — no API calls)
+        by_type: Dict[str, List[float]] = {}
+        all_scores: List[float] = []
+        for tweet_id, data in self.tracked_tweets.items():
+            ctype = data.get('content_type')
+            if not ctype:
+                continue
+            score = self.get_engagement_score(tweet_id)
+            by_type.setdefault(ctype, []).append(score)
+            all_scores.append(score)
+
+        if len(all_scores) < 5:
+            return {}  # Not enough data to learn from yet
+
+        overall_avg = sum(all_scores) / len(all_scores)
+        if overall_avg <= 0:
+            return {}
+
+        multipliers = {}
+        for ctype, scores in by_type.items():
+            if len(scores) < 2:
+                continue
+            type_avg = sum(scores) / len(scores)
+            multiplier = type_avg / overall_avg
+            multipliers[ctype] = max(0.5, min(2.0, multiplier))
+
+        if multipliers:
+            logger.info(f"Content type performance multipliers: { {k: round(v, 2) for k, v in multipliers.items()} }")
+        return multipliers
 
     def should_adjust_style(self) -> bool:
         """
