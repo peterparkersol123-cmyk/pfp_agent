@@ -61,6 +61,12 @@ class Settings:
     TWITTER_MAX_TWEETS_PER_DAY: int = int(os.getenv("TWITTER_MAX_TWEETS_PER_DAY", "50"))
     TWITTER_MAX_TWEETS_PER_HOUR: int = int(os.getenv("TWITTER_MAX_TWEETS_PER_HOUR", "10"))
 
+    # Proactively replying to monitored accounts is blocked by X's API unless
+    # that account has mentioned/engaged the bot first (403 "reply not allowed").
+    # Off by default so the bot still READS monitored accounts for learning but
+    # doesn't waste Claude calls generating replies that X will reject.
+    ENABLE_MONITORED_REPLIES: bool = os.getenv("ENABLE_MONITORED_REPLIES", "False").lower() == "true"
+
     # Blocklist - Users to never reply to or engage with
     BLOCKED_USERNAMES: set = {
         "armoskii",  # Requested to be blocked

@@ -56,7 +56,19 @@ class AccountMonitor:
         self.knowledge_file = settings.DATA_DIR / "learned_context.jsonl"
         self.knowledge_file.parent.mkdir(parents=True, exist_ok=True)
 
-        logger.info(f"Initialized AccountMonitor for {len(self.target_usernames)} accounts")
+        # Whether to attempt replies to monitored accounts. Off by default
+        # because X's API rejects replies to accounts that haven't engaged the
+        # bot (403). When off, we still read + learn from their tweets.
+        self.replies_enabled = settings.ENABLE_MONITORED_REPLIES
+
+        # Authors that returned a 403 "reply not allowed" — skip them for the
+        # rest of this run so we don't burn Claude calls on doomed replies.
+        self._reply_blocked_authors: Set[str] = set()
+
+        logger.info(
+            f"Initialized AccountMonitor for {len(self.target_usernames)} accounts "
+            f"(replies {'enabled' if self.replies_enabled else 'DISABLED — learn-only'})"
+        )
 
     def get_recent_tweets_from_user(self, username: str, minutes_ago: int = 120) -> List[Dict]:
         """
@@ -256,7 +268,7 @@ If they mention pfp or the community - be EXTREMELY positive and supportive."""
 
         return None
 
-    def post_reply(self, reply_text: str, tweet_id: str) -> bool:
+    def post_reply(self, reply_text: str, tweet_id: str) -> str:
         """
         Post a reply to a tweet.
 
@@ -265,7 +277,8 @@ If they mention pfp or the community - be EXTREMELY positive and supportive."""
             tweet_id: ID of the tweet to reply to
 
         Returns:
-            True if successful
+            "ok" if posted, "blocked" if X rejected the reply (not engaged by
+            author), or "error" for any other failure.
         """
         try:
             result = self.twitter_client.client.create_tweet(
@@ -282,12 +295,18 @@ If they mention pfp or the community - be EXTREMELY positive and supportive."""
                 if self.state_manager:
                     self.state_manager.add_replied_monitored_tweet(tweet_id)
 
-                return True
+                return "ok"
 
         except Exception as e:
+            msg = str(e)
+            # X blocks replies to accounts that haven't engaged the bot.
+            # This is a policy rejection, not a transient error — don't retry.
+            if "not allowed" in msg.lower() or "not been mentioned" in msg.lower():
+                logger.warning(f"Reply to {tweet_id} blocked by X policy (author hasn't engaged bot)")
+                return "blocked"
             logger.error(f"Error posting reply: {e}")
 
-        return False
+        return "error"
 
     def check_and_reply_to_accounts(self, look_back_minutes: int = 120) -> int:
         """
@@ -317,11 +336,22 @@ If they mention pfp or the community - be EXTREMELY positive and supportive."""
 
                 logger.info(f"Found {len(tweets)} new tweets from @{username}")
 
-                # Reply to each tweet
+                # Always read + learn from their tweets (free, no Claude call).
                 for tweet in tweets:
-                    # Save tweet content to knowledge base so generator learns from it
                     self.save_to_knowledge_base(tweet)
 
+                # Replies to monitored accounts are off by default (X rejects
+                # them with 403 unless the account engaged the bot first).
+                if not self.replies_enabled:
+                    continue
+
+                # Skip accounts we've already learned will reject our replies
+                if username.lower() in self._reply_blocked_authors:
+                    logger.debug(f"Skipping @{username} — replies blocked by X policy this run")
+                    continue
+
+                # Reply to each tweet
+                for tweet in tweets:
                     # Check rate limiter before generating/posting
                     if self.rate_limiter:
                         can_reply, reason = self.rate_limiter.can_reply()
@@ -333,14 +363,20 @@ If they mention pfp or the community - be EXTREMELY positive and supportive."""
                     reply_text = self.generate_reply(tweet)
 
                     if reply_text and len(reply_text) <= 280:
-                        # Post reply
-                        if self.post_reply(reply_text, tweet['id']):
+                        status = self.post_reply(reply_text, tweet['id'])
+                        if status == "ok":
                             logger.info(f"✓ Replied to @{username}: {reply_text[:50]}...")
                             total_replies += 1
                             # Record in shared rate limiter
                             if self.rate_limiter:
                                 self.rate_limiter.record_reply()
                             time.sleep(3)  # Rate limiting between replies
+                        elif status == "blocked":
+                            # X won't allow replies to this author — stop trying
+                            # this account so we don't waste more Claude calls.
+                            self._reply_blocked_authors.add(username.lower())
+                            logger.info(f"Marking @{username} as non-replyable for this run")
+                            break
                         else:
                             logger.warning(f"Failed to reply to @{username}")
                     else:
