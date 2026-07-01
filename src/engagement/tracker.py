@@ -4,7 +4,6 @@ Engagement tracking system to monitor tweet performance and learn from successfu
 
 import json
 import os
-import time
 from pathlib import Path
 from typing import Dict, List, Optional
 from datetime import datetime, timezone
@@ -142,9 +141,59 @@ class EngagementTracker:
         )
         return score
 
+    def update_metrics_batch(self, tweet_ids: List[str]) -> int:
+        """
+        Fetch and update metrics for up to 100 tweets in a single X API read
+        (vs one read per tweet with update_metrics).
+
+        Args:
+            tweet_ids: Tweet IDs to refresh
+
+        Returns:
+            Number of tracked tweets updated
+        """
+        ids = [str(tid) for tid in tweet_ids if tid][:100]
+        if not ids:
+            return 0
+
+        try:
+            response = self.twitter_client.client.get_tweets(
+                ids=ids,
+                tweet_fields=['public_metrics'],
+                user_auth=True
+            )
+        except Exception as e:
+            logger.error(f"Error batch-fetching metrics for {len(ids)} tweets: {e}")
+            return 0
+
+        updated = 0
+        for tweet in (response.data or []):
+            tweet_id = str(tweet.id)
+            if tweet_id not in self.tracked_tweets:
+                continue
+            metrics = tweet.public_metrics
+            self.tracked_tweets[tweet_id].update({
+                'likes': metrics.get('like_count', 0),
+                'retweets': metrics.get('retweet_count', 0),
+                'replies': metrics.get('reply_count', 0),
+                'impressions': metrics.get('impression_count', 0),
+                'last_updated': datetime.now(timezone.utc).isoformat()
+            })
+            updated += 1
+
+        if updated:
+            self._save()
+            logger.info(f"Batch-updated metrics for {updated} tweets in one API call")
+        return updated
+
     def get_top_performing_tweets(self, limit: int = 5) -> List[Dict]:
         """
         Get top performing tweets based on engagement score.
+
+        Uses cached metrics only — refresh via update_metrics_batch() in the
+        posting cycle. This method is called on every generation attempt for
+        style learning, so fetching from X here would burn one read per
+        tracked tweet per attempt.
 
         Args:
             limit: Number of top tweets to return
@@ -152,11 +201,6 @@ class EngagementTracker:
         Returns:
             List of tweet dicts sorted by engagement score
         """
-        # Update metrics for all tracked tweets
-        for tweet_id in list(self.tracked_tweets.keys()):
-            self.update_metrics(tweet_id)
-            time.sleep(1)  # Rate limiting
-
         # Calculate scores and sort
         scored_tweets = []
         for tweet_id, data in self.tracked_tweets.items():
@@ -169,6 +213,32 @@ class EngagementTracker:
             })
 
         scored_tweets.sort(key=lambda x: x['score'], reverse=True)
+        return scored_tweets[:limit]
+
+    def get_bottom_performing_tweets(self, limit: int = 3) -> List[Dict]:
+        """
+        Get the lowest-scoring tweets whose metrics have actually been fetched
+        (a tweet that was never measured would score a meaningless 0).
+        Used as negative examples for style learning.
+
+        Args:
+            limit: Number of bottom tweets to return
+
+        Returns:
+            List of tweet dicts sorted by engagement score ascending
+        """
+        scored_tweets = []
+        for tweet_id, data in self.tracked_tweets.items():
+            if not data.get('last_updated'):
+                continue
+            scored_tweets.append({
+                'tweet_id': tweet_id,
+                'text': data['text'],
+                'score': self.get_engagement_score(tweet_id),
+                'metrics': data
+            })
+
+        scored_tweets.sort(key=lambda x: x['score'])
         return scored_tweets[:limit]
 
     def get_successful_patterns(self) -> str:

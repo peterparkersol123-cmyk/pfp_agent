@@ -274,7 +274,7 @@ Insights:"""
         self,
         content_type: Optional[ContentType] = None,
         custom_prompt: Optional[str] = None,
-        max_attempts: int = 10,
+        max_attempts: int = 4,
         use_live_data: bool = True,
         engagement_tracker=None
     ) -> Optional[str]:
@@ -299,10 +299,20 @@ Insights:"""
                 if custom_prompt:
                     system_prompt = self.templates.BASE_SYSTEM_PROMPT
                     user_prompt = custom_prompt
+                    recent_output_context = self._build_recent_output_context()
+                    if recent_output_context:
+                        user_prompt = f"{user_prompt}\n\n{recent_output_context}"
                 else:
                     template = self._select_template(content_type, engagement_tracker=engagement_tracker)
                     system_prompt = template.system_prompt
                     user_prompt = random.choice(template.user_prompts)
+
+                    # Show the model what it recently posted so it writes something
+                    # new — preventing a duplicate in the prompt is far cheaper than
+                    # generating one and rejecting it afterwards
+                    recent_output_context = self._build_recent_output_context()
+                    if recent_output_context:
+                        user_prompt = f"{user_prompt}\n\n{recent_output_context}"
 
                     # Add live data context for relevant content types
                     if use_live_data and self._should_use_live_data(template.content_type):
@@ -382,10 +392,28 @@ Insights:"""
                     # Cost cap: demand 8/10 early, but accept 7/10 after a few
                     # attempts so we don't burn endless API calls chasing perfection.
                     score, feedback = self.critic.critique_tweet(content)
-                    required_score = 8 if attempt < 4 else 7
+                    required_score = 8 if attempt < 2 else 7
 
                     if score < required_score:
-                        logger.warning(f"Tweet scored {score}/10 (need {required_score}), regenerating. Feedback: {feedback[:100]}")
+                        # Revise using the critic's feedback instead of throwing the
+                        # draft away — one targeted rewrite converges faster (and
+                        # cheaper) than regenerating from scratch
+                        logger.info(f"Tweet scored {score}/10 (need {required_score}), revising. Feedback: {feedback[:100]}")
+                        revised = self._revise_tweet(content, feedback, system_prompt)
+                        if revised and revised != content:
+                            revised_valid, _ = self.validator.validate(revised)
+                            gm_blocked = (
+                                self._contains_gm(revised)
+                                and self.last_gm_date == datetime.now(timezone.utc).strftime('%Y-%m-%d')
+                            )
+                            if revised_valid and not gm_blocked and not self._is_too_similar(revised):
+                                revised_score, _ = self.critic.critique_tweet(revised)
+                                if revised_score >= score:
+                                    content = revised
+                                    score = revised_score
+
+                    if score < required_score:
+                        logger.warning(f"Tweet still {score}/10 after revision (need {required_score}), regenerating")
                         continue  # Try again
 
                     logger.info(f"Tweet approved with score {score}/10")
@@ -557,6 +585,73 @@ Make it Pepe-style: cheeky, smart, observant. Comment on the token naturally."""
         logger.error(f"Failed to generate valid thread after {max_attempts} attempts")
         return None
 
+    def _revise_tweet(self, tweet: str, feedback: str, system_prompt: str) -> Optional[str]:
+        """
+        Rewrite a low-scoring tweet using the critic's feedback.
+
+        Args:
+            tweet: The draft tweet that scored below threshold
+            feedback: The critic's raw feedback (includes the Fix: line)
+            system_prompt: Same system prompt used for generation (keeps the
+                prompt cache warm within the retry burst)
+
+        Returns:
+            Revised tweet text or None if the call failed
+        """
+        try:
+            prompt = f"""Your draft tweet:
+"{tweet}"
+
+Your inner critic said:
+{feedback}
+
+Rewrite the tweet to fix the critique. Keep what works, change what doesn't. Same rules as always: all lowercase, no emojis, no hashtags, no cashtags, under 200 characters. Output ONLY the revised tweet text, nothing else."""
+
+            revised = self.claude_client.generate_content(
+                prompt=prompt,
+                system_prompt=system_prompt,
+                max_tokens=100,
+                temperature=0.8
+            )
+
+            if not revised:
+                return None
+
+            revised = revised.strip()
+            if revised.startswith('"') and revised.endswith('"'):
+                revised = revised[1:-1]
+            if revised.startswith("'") and revised.endswith("'"):
+                revised = revised[1:-1]
+            return self._strip_emojis(revised)
+
+        except Exception as e:
+            logger.error(f"Error revising tweet: {e}")
+            return None
+
+    def _build_recent_output_context(self) -> Optional[str]:
+        """
+        Build a prompt section describing what the bot recently posted, so the
+        model avoids repeats at generation time instead of the bot rejecting
+        duplicates (and paying for a regeneration) afterwards.
+
+        Returns:
+            Formatted context string or None if there's nothing to report
+        """
+        parts = []
+
+        if self.recent_tweets:
+            parts.append("YOUR RECENT TWEETS (do not repeat these themes, phrasings, or jokes — say something new):")
+            for tweet in self.recent_tweets[-5:]:
+                parts.append(f'- "{tweet}"')
+
+        today = datetime.now(timezone.utc).strftime('%Y-%m-%d')
+        if self.last_gm_date == today:
+            parts.append("You already said 'gm' today — do NOT use 'gm' in this tweet.")
+
+        if not parts:
+            return None
+        return "\n".join(parts)
+
     def _should_use_live_data(self, content_type: ContentType) -> bool:
         """
         Determine if live data should be used for this content type.
@@ -615,6 +710,23 @@ Make it Pepe-style: cheeky, smart, observant. Comment on the token naturally."""
                 "\nUse similar energy, topics, and style that resonate with your audience. "
                 "Learn from what works - these tweets got the most engagement."
             )
+
+            # Contrast with the flops — negative examples teach more than
+            # positive ones alone, and this data is already on disk (no API cost)
+            try:
+                top_ids = {t.get('tweet_id') for t in top_tweets}
+                flops = [
+                    t for t in engagement_tracker.get_bottom_performing_tweets(limit=2)
+                    if t.get('tweet_id') not in top_ids
+                ]
+                if flops:
+                    guidance_parts.append("\nYour recent LOW-performing tweets (avoid this energy/angle):")
+                    for tweet_data in flops:
+                        guidance_parts.append(
+                            f"- (Score: {tweet_data['score']:.0f}) \"{tweet_data['text']}\""
+                        )
+            except Exception as e:
+                logger.debug(f"Could not add low-performer examples: {e}")
 
             guidance = "\n".join(guidance_parts)
             logger.info("Added style guidance from top-performing tweets")

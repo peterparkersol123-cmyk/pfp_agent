@@ -28,23 +28,41 @@ setup_logger()
 logger = get_logger(__name__)
 
 
-def mention_monitoring_loop(mention_handler, check_interval_minutes=5, stop_event=None):
+def mention_monitoring_loop(mention_handler, check_interval_minutes=5, stop_event=None,
+                            state_manager=None, slow_interval_minutes=20):
     """
     Continuously monitor and reply to mentions in a separate thread.
 
+    Polls adaptively: fast (check_interval_minutes) for the first 2 hours after
+    our latest post — when mentions actually arrive — and slow
+    (slow_interval_minutes) the rest of the time to save X API read quota.
+
     Args:
         mention_handler: MentionHandler instance
-        check_interval_minutes: How often to check for mentions (default 5 minutes)
+        check_interval_minutes: Fast polling interval (default 5 minutes)
         stop_event: Threading event to signal when to stop
+        state_manager: BotStateManager, used to know when we last posted
+        slow_interval_minutes: Polling interval when no recent post (default 20)
     """
-    logger.info(f"Started mention monitoring thread (checking every {check_interval_minutes} minutes)")
+    logger.info(
+        f"Started mention monitoring thread "
+        f"(every {check_interval_minutes} min for 2h after a post, every {slow_interval_minutes} min otherwise)"
+    )
 
     while not (stop_event and stop_event.is_set()):
         try:
+            # Fast polling only pays off while a fresh post is drawing mentions
+            interval = slow_interval_minutes
+            if state_manager and state_manager.recent_tweets:
+                last_post_ts = state_manager.recent_tweets[-1].get('timestamp', 0)
+                minutes_since_post = (time.time() - last_post_ts) / 60
+                if minutes_since_post < 120:
+                    interval = check_interval_minutes
+
             logger.debug("Mention monitor: Checking for new mentions...")
             # Use at least 120 min look-back so mentions aren't missed after restarts.
             # replied_mention_ids prevents double-replies.
-            look_back = max(check_interval_minutes * 2 + 5, 120)
+            look_back = max(interval * 2 + 5, 120)
             mentions_replied = mention_handler.handle_mentions(look_back_minutes=look_back)
 
             if mentions_replied > 0:
@@ -53,7 +71,7 @@ def mention_monitoring_loop(mention_handler, check_interval_minutes=5, stop_even
                 logger.debug("Mention monitor: No new mentions to reply to")
 
             # Wait before next check
-            for _ in range(check_interval_minutes * 60):
+            for _ in range(interval * 60):
                 if stop_event and stop_event.is_set():
                     break
                 time.sleep(1)
@@ -120,6 +138,7 @@ def main():
     max_replies_per_tweet = int(os.getenv('MAX_REPLIES_PER_TWEET', '3'))
     max_total_replies_per_hour = int(os.getenv('MAX_TOTAL_REPLIES_PER_HOUR', '20'))
     mention_check_interval = int(os.getenv('MENTION_CHECK_INTERVAL_MINUTES', '5'))
+    mention_check_slow_interval = int(os.getenv('MENTION_CHECK_INTERVAL_SLOW_MINUTES', '20'))
     enable_milestones = os.getenv('ENABLE_MILESTONE_TWEETS', 'True').lower() == 'true'
     milestone_check_interval = int(os.getenv('MILESTONE_CHECK_INTERVAL_MINUTES', '20'))
 
@@ -137,7 +156,7 @@ def main():
     print(f"  Reply System: {'Enabled' if enable_replies else 'Disabled'}")
     print(f"  Max Replies Per Tweet: {max_replies_per_tweet}")
     print(f"  Max Total Replies Per Hour: {max_total_replies_per_hour} (combined mentions + comments)")
-    print(f"  Mention Monitoring: {'Async (every ' + str(mention_check_interval) + ' min)' if enable_replies else 'Disabled'}")
+    print(f"  Mention Monitoring: {'Async (every ' + str(mention_check_interval) + ' min for 2h after a post, else every ' + str(mention_check_slow_interval) + ' min)' if enable_replies else 'Disabled'}")
     print(f"  Milestone Tweets: {'Enabled (every ' + str(milestone_check_interval) + ' min, max 3/day)' if enable_milestones else 'Disabled'}")
     print(f"  Monitored Accounts: {len(monitored_accounts)} accounts")
     if monitored_accounts:
@@ -188,7 +207,8 @@ def main():
         if mention_handler:
             mention_thread = threading.Thread(
                 target=mention_monitoring_loop,
-                args=(mention_handler, mention_check_interval, stop_event),
+                args=(mention_handler, mention_check_interval, stop_event,
+                      state_manager, mention_check_slow_interval),
                 daemon=True,
                 name="MentionMonitor"
             )
@@ -260,11 +280,13 @@ def main():
                 # Step 2: Update engagement metrics
                 if recent_tweets:
                     print("[2/5] Updating engagement metrics...")
-                    for tweet_data in recent_tweets[-5:]:  # Track last 5
-                        metrics = engagement_tracker.update_metrics(tweet_data['id'])
+                    # One batch read for every tracked tweet (up to 100) instead
+                    # of one API call per tweet — better learning data, fewer reads
+                    engagement_tracker.update_metrics_batch(list(engagement_tracker.tracked_tweets.keys()))
+                    for tweet_data in recent_tweets[-5:]:
+                        metrics = engagement_tracker.tracked_tweets.get(tweet_data['id'])
                         if metrics:
                             print(f"  Tweet {tweet_data['id'][:10]}... - {metrics['likes']} likes, {metrics['retweets']} RTs")
-                        time.sleep(1)
 
                     # Get top performers
                     top_tweets = engagement_tracker.get_top_performing_tweets(limit=3)

@@ -98,6 +98,7 @@ class ClaudeClient:
                 # Extract content
                 if response.content and len(response.content) > 0:
                     content = response.content[0].text
+                    self._log_usage(response)
                     logger.info(f"Successfully generated content ({len(content)} characters)")
                     return content
                 else:
@@ -145,6 +146,26 @@ class ClaudeClient:
                 return None
 
         return None
+
+    def _log_usage(self, response) -> None:
+        """
+        Log token usage including cache activity. If cache_read stays 0 across
+        a retry/reply burst, the prompt cache is silently missing (e.g. system
+        prompt below the model's minimum cacheable prefix) and we're paying
+        full input price on every call.
+        """
+        try:
+            usage = getattr(response, "usage", None)
+            if usage is None:
+                return
+            cache_read = getattr(usage, "cache_read_input_tokens", 0) or 0
+            cache_write = getattr(usage, "cache_creation_input_tokens", 0) or 0
+            logger.info(
+                f"Token usage: input={usage.input_tokens} output={usage.output_tokens} "
+                f"cache_read={cache_read} cache_write={cache_write}"
+            )
+        except Exception:
+            pass  # Usage logging must never break generation
 
     def generate_content_streaming(
         self,
