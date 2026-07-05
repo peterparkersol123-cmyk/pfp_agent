@@ -132,7 +132,8 @@ def milestone_monitoring_loop(watcher, generator, twitter, engagement_tracker,
 
 def raid_monitoring_loop(account_monitor, quote_tweeter, check_interval_minutes=120,
                          max_likes_per_day=20, max_retweets_per_day=6,
-                         max_monitored_quotes_per_day=5, stop_event=None):
+                         max_monitored_quotes_per_day=5, enable_retweet_fallback=False,
+                         stop_event=None):
     """
     Fast engagement loop over monitored accounts ("raiding"): likes every
     fresh tweet, replies/quotes where X's engagement gate permits, and
@@ -152,6 +153,7 @@ def raid_monitoring_loop(account_monitor, quote_tweeter, check_interval_minutes=
                 max_likes_per_day=max_likes_per_day,
                 max_retweets_per_day=max_retweets_per_day,
                 max_monitored_quotes_per_day=max_monitored_quotes_per_day,
+                enable_retweet_fallback=enable_retweet_fallback,
             )
             if any(stats.get(k) for k in ("liked", "replied", "quoted", "retweeted")):
                 print(f"\n  ⚔️ RAID: {stats['liked']} liked, {stats['replied']} replied, "
@@ -285,6 +287,8 @@ def main():
     max_likes_per_day = int(os.getenv('MAX_LIKES_PER_DAY', '20'))
     max_retweets_per_day = int(os.getenv('MAX_RETWEETS_PER_DAY', '6'))
     max_monitored_quotes_per_day = int(os.getenv('MAX_MONITORED_QUOTES_PER_DAY', '5'))
+    # Quote-only engagement by default; flip to true to retweet gate-blocked accounts
+    enable_retweet_fallback = os.getenv('ENABLE_RETWEET_FALLBACK', 'False').lower() == 'true'
 
     # Get monitored accounts (comma-separated usernames)
     monitored_accounts_str = os.getenv('MONITORED_ACCOUNTS', '')
@@ -403,7 +407,8 @@ def main():
                 target=raid_monitoring_loop,
                 args=(account_monitor, quote_tweeter, raid_check_interval,
                       max_likes_per_day, max_retweets_per_day,
-                      max_monitored_quotes_per_day, stop_event),
+                      max_monitored_quotes_per_day, enable_retweet_fallback,
+                      stop_event),
                 daemon=True,
                 name="RaidEngine"
             )

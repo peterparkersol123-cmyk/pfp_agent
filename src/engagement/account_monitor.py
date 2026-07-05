@@ -319,7 +319,8 @@ If they mention pfp or the community - be EXTREMELY positive and supportive."""
         quote_tweeter=None,
         max_likes_per_day: int = 20,
         max_retweets_per_day: int = 6,
-        max_monitored_quotes_per_day: int = 5
+        max_monitored_quotes_per_day: int = 5,
+        enable_retweet_fallback: bool = False
     ) -> Dict[str, int]:
         """
         Raid pass over monitored accounts — engage fresh tweets fast:
@@ -329,11 +330,10 @@ If they mention pfp or the community - be EXTREMELY positive and supportive."""
            author blocked for 7 days (persisted), so at most one Claude
            call is wasted per account per week. Accounts that engage the bot
            (mention it) unlock automatically on the weekly retry.
-        3. QUOTE-TWEET the best tweet of the batch (X gates quotes behind the
-           same engagement rule as replies — blocked authors are skipped)
-        4. RETWEET the best tweet when quoting isn't possible — retweets are
-           always allowed, keeping the bot present on big accounts' posts
-        5. Save everything to the knowledge base (learning stays free)
+        3. QUOTE-TWEET each account's newest tweet (X gates quotes behind the
+           same engagement rule as replies — blocked authors are skipped).
+           Optional retweet fallback for gate-blocked accounts is off by default.
+        4. Save everything to the knowledge base (learning stays free)
 
         Requires a state_manager (dedup + caps are persistent).
 
@@ -396,10 +396,10 @@ If they mention pfp or the community - be EXTREMELY positive and supportive."""
                 logger.error(f"Error raiding @{username}: {e}")
                 continue
 
-        # Amplify each account's newest new tweet. Quote-tweet it if X's
-        # engagement gate allows that author; otherwise plain retweet (always
-        # allowed) so the bot still shows up on the post. One amplification
-        # per account per pass so the timeline doesn't get spammy.
+        # Amplify each account's newest new tweet by quote-tweeting it (when
+        # X's engagement gate allows that author). Optional retweet fallback
+        # for gate-blocked accounts is off by default. One amplification per
+        # account per pass so the timeline doesn't get spammy.
         if quote_candidates:
             # Best (highest-engagement) new tweet per author
             best_by_author: Dict[str, Dict] = {}
@@ -434,9 +434,10 @@ If they mention pfp or the community - be EXTREMELY positive and supportive."""
                         # retweets can still amplify the rest
                         pass
 
-                # Retweet fallback when we couldn't quote (gate-blocked, capped,
-                # or no quote_tweeter). Always allowed by X.
-                if not quoted and self.state_manager.retweets_in_last_24h() < max_retweets_per_day:
+                # Optional retweet fallback when we couldn't quote (gate-blocked
+                # or capped). Off by default — quote-only engagement.
+                if (not quoted and enable_retweet_fallback
+                        and self.state_manager.retweets_in_last_24h() < max_retweets_per_day):
                     if self.twitter_client.retweet_tweet(str(candidate['id'])):
                         self.state_manager.record_retweet()
                         stats["retweeted"] += 1
