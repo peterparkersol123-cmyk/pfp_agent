@@ -64,7 +64,10 @@ class TwitterClient:
     def post_tweet(
         self,
         text: str,
-        max_retries: int = 3
+        max_retries: int = 3,
+        quote_tweet_id: Optional[str] = None,
+        poll_options: Optional[List[str]] = None,
+        poll_duration_minutes: int = 1440
     ) -> Optional[Dict[str, Any]]:
         """
         Post a tweet to main timeline.
@@ -72,6 +75,9 @@ class TwitterClient:
         Args:
             text: Tweet text
             max_retries: Maximum number of retry attempts
+            quote_tweet_id: If set, post as a quote tweet of this tweet
+            poll_options: If set (2-4 strings, max 25 chars each), attach a poll
+            poll_duration_minutes: Poll duration (default 24h)
 
         Returns:
             Tweet data or None if failed
@@ -84,9 +90,22 @@ class TwitterClient:
             logger.warning(f"Tweet exceeds max length ({len(text)} > {self.max_tweet_length})")
             text = text[:self.max_tweet_length - 3] + "..."
 
+        # Build optional create_tweet kwargs (quote tweet / poll)
+        extra_kwargs = {}
+        if quote_tweet_id:
+            extra_kwargs["quote_tweet_id"] = quote_tweet_id
+        if poll_options:
+            # X limits: 2-4 options, 25 chars each
+            options = [opt[:25] for opt in poll_options[:4]]
+            if len(options) >= 2:
+                extra_kwargs["poll_options"] = options
+                extra_kwargs["poll_duration_minutes"] = poll_duration_minutes
+            else:
+                logger.warning("Poll needs at least 2 options — posting as normal tweet")
+
         # Debug mode - don't actually post
         if not self.should_post:
-            logger.info(f"[DEBUG MODE] Would post tweet: {text[:100]}...")
+            logger.info(f"[DEBUG MODE] Would post tweet: {text[:100]}... (extras: {list(extra_kwargs.keys())})")
             return {
                 "id": "debug_tweet_id",
                 "text": text,
@@ -97,7 +116,7 @@ class TwitterClient:
             try:
                 logger.debug(f"Posting tweet (attempt {attempt + 1}/{max_retries})")
 
-                response = self.client.create_tweet(text=text)
+                response = self.client.create_tweet(text=text, **extra_kwargs)
 
                 if response.data:
                     tweet_id = response.data['id']

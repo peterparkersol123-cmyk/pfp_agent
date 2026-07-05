@@ -447,6 +447,76 @@ Insights:"""
         logger.error(f"Failed to generate valid tweet after {max_attempts} attempts")
         return None
 
+    def generate_poll(self, max_attempts: int = 3) -> Optional[Dict[str, Any]]:
+        """
+        Generate an in-character poll (question + 2-4 options).
+
+        Polls are cheap engagement machines: every vote is an interaction the
+        algorithm rewards, and degens love voting on degen questions.
+
+        Returns:
+            {"question": str, "options": List[str]} or None
+        """
+        prompt = """Create a Twitter POLL for the pfp community. Polls get massive engagement - every vote counts as an interaction.
+
+Good poll vibes (pick ONE direction, don't copy these):
+- degen self-reporting: "how's the bag looking" / "what time did you check the chart today"
+- community conviction: staking, holding, flywheel questions
+- market mood: "this week we are..." / bull vs bear energy
+- absurd degen dilemmas that make people laugh AND vote
+
+Rules:
+- Question: under 200 chars, all lowercase, no emojis, no hashtags, in the pfp frog voice
+- 2-4 options, each UNDER 25 CHARACTERS, all lowercase, punchy and funny
+- At least one option should be the "down bad but honest" choice - honesty drives votes
+
+Respond with ONLY this JSON, nothing else:
+{"question": "...", "options": ["...", "...", "..."]}"""
+
+        for attempt in range(max_attempts):
+            try:
+                response = self.claude_client.generate_content(
+                    prompt=prompt,
+                    system_prompt=self.templates.BASE_SYSTEM_PROMPT,
+                    max_tokens=200,
+                    temperature=0.9
+                )
+                if not response:
+                    continue
+
+                # Extract JSON (strip code fences if the model added them)
+                text = response.strip()
+                if "```" in text:
+                    text = re.sub(r"```(?:json)?", "", text).strip()
+                start, end = text.find("{"), text.rfind("}")
+                if start == -1 or end == -1:
+                    logger.warning("Poll generation: no JSON found, retrying")
+                    continue
+
+                poll = json.loads(text[start:end + 1])
+                question = self._strip_emojis(str(poll.get("question", "")).strip())
+                options = [self._strip_emojis(str(o).strip())[:25] for o in poll.get("options", [])]
+                options = [o for o in options if o]
+
+                if not question or len(question) > 240 or len(options) < 2:
+                    logger.warning(f"Poll generation: invalid structure (q={len(question)} chars, {len(options)} options)")
+                    continue
+
+                # Question must pass the same content rules as tweets
+                is_valid, errors = self.validator.validate(question)
+                if not is_valid:
+                    logger.warning(f"Poll question failed validation: {errors}")
+                    continue
+
+                logger.info(f"Generated poll: {question[:60]}... ({len(options)} options)")
+                return {"question": question, "options": options[:4]}
+
+            except Exception as e:
+                logger.error(f"Error generating poll: {e}")
+
+        logger.error(f"Failed to generate valid poll after {max_attempts} attempts")
+        return None
+
     def generate_tweet_about_specific_token(
         self,
         token_address: str,

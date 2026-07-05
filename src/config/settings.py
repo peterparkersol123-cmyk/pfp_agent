@@ -67,6 +67,10 @@ class Settings:
     # doesn't waste Claude calls generating replies that X will reject.
     ENABLE_MONITORED_REPLIES: bool = os.getenv("ENABLE_MONITORED_REPLIES", "False").lower() == "true"
 
+    # Max replies the bot posts in one conversation thread. >1 lets it hold an
+    # actual back-and-forth when someone keeps engaging (was hardcoded to 1).
+    MAX_CONVERSATION_TURNS: int = int(os.getenv("MAX_CONVERSATION_TURNS", "3"))
+
     # Blocklist - Users to never reply to or engage with
     BLOCKED_USERNAMES: set = {
         "armoskii",  # Requested to be blocked

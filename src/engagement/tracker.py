@@ -261,6 +261,50 @@ class EngagementTracker:
 
         return "\n".join(patterns)
 
+    def get_best_posting_hour(self) -> Optional[int]:
+        """
+        Learn the best UTC hour to post based on historical engagement.
+
+        Buckets tweets into 3-hour windows by posting hour and returns the
+        middle hour of the best-performing window. Needs at least 8 scored
+        tweets across 2+ windows, and the best window needs 2+ tweets —
+        otherwise returns None (not enough signal).
+
+        Uses cached metrics only — zero API calls.
+        """
+        buckets: Dict[int, List[float]] = {}
+        total = 0
+        for tweet_id, data in self.tracked_tweets.items():
+            created = data.get('created_at')
+            if not created:
+                continue
+            try:
+                hour = datetime.fromisoformat(str(created)).hour
+            except ValueError:
+                continue
+            score = self.get_engagement_score(tweet_id)
+            bucket = (hour // 3) * 3  # 0, 3, 6, ... 21
+            buckets.setdefault(bucket, []).append(score)
+            total += 1
+
+        if total < 8 or len(buckets) < 2:
+            return None
+
+        best_bucket, best_avg = None, -1.0
+        for bucket, scores in buckets.items():
+            if len(scores) < 2:
+                continue
+            avg = sum(scores) / len(scores)
+            if avg > best_avg:
+                best_bucket, best_avg = bucket, avg
+
+        if best_bucket is None or best_avg <= 0:
+            return None
+
+        best_hour = best_bucket + 1  # middle of the 3h window
+        logger.info(f"Best posting window: {best_bucket:02d}:00-{best_bucket+3:02d}:00 UTC (avg score {best_avg:.1f}) -> targeting {best_hour:02d}:00")
+        return best_hour
+
     def get_content_type_multipliers(self) -> Dict[str, float]:
         """
         Learn which content types perform: compute a weight multiplier per

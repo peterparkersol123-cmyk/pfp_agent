@@ -107,10 +107,24 @@ class MentionHandler:
                 if mention.id in self.replied_mention_ids:
                     continue
 
-                # Skip if we've already engaged in this conversation thread (max once per thread)
-                if mention.conversation_id and mention.conversation_id in self.replied_conversation_ids:
-                    logger.debug(f"Skipping mention {mention.id} - already engaged in conversation {mention.conversation_id}")
-                    continue
+                # Multi-turn conversations: allow up to MAX_CONVERSATION_TURNS
+                # replies per thread. Someone replying back to the bot shows up
+                # here as a new mention — continuing that convo is the highest
+                # value engagement there is. Without a state manager, fall back
+                # to the old once-per-thread behavior.
+                conversation_turns = 0
+                if mention.conversation_id:
+                    if self.state_manager:
+                        conversation_turns = self.state_manager.get_conversation_turns(mention.conversation_id)
+                        if conversation_turns >= settings.MAX_CONVERSATION_TURNS:
+                            logger.debug(
+                                f"Skipping mention {mention.id} - already used "
+                                f"{conversation_turns} turns in conversation {mention.conversation_id}"
+                            )
+                            continue
+                    elif mention.conversation_id in self.replied_conversation_ids:
+                        logger.debug(f"Skipping mention {mention.id} - already engaged in conversation {mention.conversation_id}")
+                        continue
 
                 # Get author info
                 author = users_dict.get(mention.author_id)
@@ -142,6 +156,7 @@ class MentionHandler:
                     'author_followers': author.public_metrics.get('followers_count', 0),
                     'created_at': mention.created_at,
                     'conversation_id': mention.conversation_id,
+                    'conversation_turns': conversation_turns,  # replies we've already made in this thread
                     'likes': mention.public_metrics.get('like_count', 0),
                     'retweets': mention.public_metrics.get('retweet_count', 0),
                     'referenced_tweet_id': referenced_tweet_id  # The original tweet they're replying to
@@ -402,6 +417,16 @@ class MentionHandler:
                         f"Last time they said: \"{history.get('last_text', '')}\". "
                         f"Treat them like a familiar community member, not a stranger."
                     )
+
+            # Ongoing conversation: they replied back to something we said
+            turns = mention.get('conversation_turns', 0)
+            if turns >= 1:
+                dynamic_context_parts.append(
+                    f"ONGOING CONVERSATION: you've already replied {turns} time(s) in this exact thread "
+                    f"and they came back for more. Keep the convo flowing naturally - build on what's "
+                    f"been said, don't repeat yourself, don't re-explain pfp basics. This is a "
+                    f"back-and-forth between frens now."
+                )
 
             dynamic_context = ("\n\n".join(dynamic_context_parts) + "\n\n") if dynamic_context_parts else ""
 

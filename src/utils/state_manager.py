@@ -68,6 +68,16 @@ class BotStateManager:
         self.recent_tweets: List[Dict] = state.get("recent_tweets", [])
         # username (lowercase) -> {"count": int, "last_text": str, "last_at": iso str}
         self.user_interactions: Dict[str, Dict] = state.get("user_interactions", {})
+        # conversation_id -> number of replies we've posted in that thread
+        self.conversation_turns: Dict[str, int] = state.get("conversation_turns", {})
+        # Migrate legacy once-per-thread tracking: any conversation in the old
+        # set counts as 1 turn already used
+        for cid in self.replied_conversation_ids:
+            self.conversation_turns.setdefault(str(cid), 1)
+        # Quote tweet history: list of {"at": iso, "tweet_id": str, "author": str}
+        self.quote_history: List[Dict] = state.get("quote_history", [])
+        # When the last poll was posted (iso str or None)
+        self.last_poll_at: Optional[str] = state.get("last_poll_at")
 
         logger.info(
             f"Loaded bot state from {self.state_file}: "
@@ -103,6 +113,9 @@ class BotStateManager:
                 "replied_monitored_tweet_ids": list(self.replied_monitored_tweet_ids),
                 "recent_tweets": self.recent_tweets[-10:],
                 "user_interactions": self.user_interactions,
+                "conversation_turns": self.conversation_turns,
+                "quote_history": self.quote_history[-50:],
+                "last_poll_at": self.last_poll_at,
                 "last_saved": datetime.now(timezone.utc).isoformat(),
             }
             tmp_path = self.state_file.with_suffix(".tmp")
@@ -117,11 +130,17 @@ class BotStateManager:
     # -------------------------------------------------------------------------
 
     def add_replied_mention(self, mention_id: str, conversation_id: Optional[str] = None):
-        """Record that we replied to a mention and optionally its conversation thread."""
+        """Record that we replied to a mention and count the conversation turn."""
         self.replied_mention_ids.add(mention_id)
         if conversation_id:
+            cid = str(conversation_id)
             self.replied_conversation_ids.add(conversation_id)
+            self.conversation_turns[cid] = self.conversation_turns.get(cid, 0) + 1
         self._save()
+
+    def get_conversation_turns(self, conversation_id) -> int:
+        """How many times we've replied in this conversation thread."""
+        return self.conversation_turns.get(str(conversation_id), 0)
 
     # -------------------------------------------------------------------------
     # Reply tracking (ReplyHandler)
@@ -168,6 +187,55 @@ class BotStateManager:
     def get_user_history(self, username: str) -> Optional[Dict]:
         """Return interaction history for a user, or None if first contact."""
         return self.user_interactions.get(username.lower().lstrip("@"))
+
+    # -------------------------------------------------------------------------
+    # Quote tweets (QuoteTweeter)
+    # -------------------------------------------------------------------------
+
+    def record_quote(self, tweet_id: str, author: str):
+        """Record a posted quote tweet (for daily caps + dedup)."""
+        self.quote_history.append({
+            "at": datetime.now(timezone.utc).isoformat(),
+            "tweet_id": str(tweet_id),
+            "author": author.lower().lstrip("@"),
+        })
+        self._save()
+
+    def quotes_in_last_hours(self, hours: int = 24) -> List[Dict]:
+        """Quote tweets posted within the last N hours."""
+        from datetime import timedelta
+        cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
+        recent = []
+        for q in self.quote_history:
+            try:
+                if datetime.fromisoformat(q["at"]) > cutoff:
+                    recent.append(q)
+            except (KeyError, ValueError):
+                continue
+        return recent
+
+    def quoted_tweet_ids(self) -> set:
+        """All tweet IDs we've ever quoted (dedup)."""
+        return {q.get("tweet_id") for q in self.quote_history}
+
+    # -------------------------------------------------------------------------
+    # Polls
+    # -------------------------------------------------------------------------
+
+    def record_poll(self):
+        """Record that a poll was just posted."""
+        self.last_poll_at = datetime.now(timezone.utc).isoformat()
+        self._save()
+
+    def hours_since_last_poll(self) -> float:
+        """Hours since the last poll, or a large number if never."""
+        if not self.last_poll_at:
+            return 9999.0
+        try:
+            delta = datetime.now(timezone.utc) - datetime.fromisoformat(self.last_poll_at)
+            return delta.total_seconds() / 3600
+        except ValueError:
+            return 9999.0
 
     # -------------------------------------------------------------------------
     # Recent tweets cache (bot.py main loop)

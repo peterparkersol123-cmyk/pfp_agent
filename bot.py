@@ -5,9 +5,11 @@ Posts tweets every N hours and replies to comments.
 """
 
 import os
+import random
 import sys
 import time
 import threading
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from dotenv import load_dotenv
 
@@ -128,6 +130,82 @@ def milestone_monitoring_loop(watcher, generator, twitter, engagement_tracker,
     logger.info("Milestone monitoring thread stopped")
 
 
+def quote_monitoring_loop(quote_tweeter, check_interval_minutes=240, stop_event=None):
+    """
+    Periodically look for a high-signal tweet in the bot's niche and
+    quote-tweet it. Quote tweets bypass X's reply restrictions and put the
+    bot in front of other accounts' audiences — the main growth channel.
+
+    QuoteTweeter enforces its own caps (max N/day, 4h min gap), so this
+    loop can tick freely. A 70% chance per eligible tick adds jitter so
+    quotes don't land at metronome-regular times.
+    """
+    logger.info(f"Started quote tweet thread (checking every {check_interval_minutes} minutes)")
+
+    while not (stop_event and stop_event.is_set()):
+        try:
+            if random.random() < 0.7:
+                posted = quote_tweeter.run_once()
+                if posted:
+                    print("\n  🔁 QUOTE TWEET POSTED")
+            else:
+                logger.debug("Quote tick skipped (jitter)")
+
+            for _ in range(check_interval_minutes * 60):
+                if stop_event and stop_event.is_set():
+                    break
+                time.sleep(1)
+
+        except Exception as e:
+            logger.error(f"Error in quote tweet loop: {e}", exc_info=True)
+            time.sleep(60)
+
+    logger.info("Quote tweet thread stopped")
+
+
+def compute_next_post_delay(default_seconds, engagement_tracker, enabled=True):
+    """
+    Smart timing: drift the daily post toward the hour that historically
+    gets the best engagement.
+
+    Picks the occurrence of the best UTC hour closest to now+24h, clamped
+    to [12h, 36h] so cadence stays roughly daily. Falls back to the default
+    interval when there's not enough engagement data or the cadence isn't
+    daily-ish. Adds 0-30 min of jitter either way.
+    """
+    jitter = random.randint(0, 1800)
+    if not enabled or default_seconds < 20 * 3600:
+        return default_seconds + jitter
+
+    try:
+        best_hour = engagement_tracker.get_best_posting_hour()
+    except Exception as e:
+        logger.warning(f"Smart timing unavailable: {e}")
+        best_hour = None
+    if best_hour is None:
+        return default_seconds + jitter
+
+    now = datetime.now(timezone.utc)
+    candidate = now.replace(hour=best_hour, minute=0, second=0, microsecond=0)
+    # The two nearest occurrences of the target hour; pick whichever keeps
+    # cadence closest to 24h
+    candidates = []
+    for day_offset in range(3):
+        occ = candidate + timedelta(days=day_offset)
+        if occ > now:
+            candidates.append(occ)
+    if not candidates:
+        return default_seconds + jitter
+
+    target = min(candidates, key=lambda c: abs((c - now).total_seconds() - 24 * 3600))
+    delay = (target - now).total_seconds()
+    if not (12 * 3600 <= delay <= 36 * 3600):
+        return default_seconds + jitter
+
+    logger.info(f"Smart timing: next post targeted at {target.strftime('%H:%M')} UTC ({delay/3600:.1f}h from now)")
+    return delay + jitter
+
+
 def main():
     """Run the production bot."""
 
@@ -141,6 +219,13 @@ def main():
     mention_check_slow_interval = int(os.getenv('MENTION_CHECK_INTERVAL_SLOW_MINUTES', '20'))
     enable_milestones = os.getenv('ENABLE_MILESTONE_TWEETS', 'True').lower() == 'true'
     milestone_check_interval = int(os.getenv('MILESTONE_CHECK_INTERVAL_MINUTES', '20'))
+    enable_quotes = os.getenv('ENABLE_QUOTE_TWEETS', 'True').lower() == 'true'
+    max_quotes_per_day = int(os.getenv('MAX_QUOTE_TWEETS_PER_DAY', '2'))
+    quote_check_interval = int(os.getenv('QUOTE_CHECK_INTERVAL_MINUTES', '240'))
+    enable_polls = os.getenv('ENABLE_POLLS', 'True').lower() == 'true'
+    poll_min_gap_hours = int(os.getenv('POLL_MIN_GAP_HOURS', '72'))
+    poll_chance = float(os.getenv('POLL_CHANCE', '0.35'))
+    enable_smart_timing = os.getenv('ENABLE_SMART_TIMING', 'True').lower() == 'true'
 
     # Get monitored accounts (comma-separated usernames)
     monitored_accounts_str = os.getenv('MONITORED_ACCOUNTS', '')
@@ -158,6 +243,9 @@ def main():
     print(f"  Max Total Replies Per Hour: {max_total_replies_per_hour} (combined mentions + comments)")
     print(f"  Mention Monitoring: {'Async (every ' + str(mention_check_interval) + ' min for 2h after a post, else every ' + str(mention_check_slow_interval) + ' min)' if enable_replies else 'Disabled'}")
     print(f"  Milestone Tweets: {'Enabled (every ' + str(milestone_check_interval) + ' min, max 3/day)' if enable_milestones else 'Disabled'}")
+    print(f"  Quote Tweets: {'Enabled (max ' + str(max_quotes_per_day) + '/day)' if enable_quotes else 'Disabled'}")
+    print(f"  Polls: {'Enabled (~2/week)' if enable_polls else 'Disabled'}")
+    print(f"  Smart Timing: {'Enabled (posts drift to best engagement hour)' if enable_smart_timing else 'Disabled'}")
     print(f"  Monitored Accounts: {len(monitored_accounts)} accounts")
     if monitored_accounts:
         for acc in monitored_accounts:
@@ -172,6 +260,7 @@ def main():
     stop_event = threading.Event()
     mention_thread = None
     milestone_thread = None
+    quote_thread = None
 
     # Initialize components
     try:
@@ -228,6 +317,19 @@ def main():
             )
             milestone_thread.start()
             logger.info("Started async milestone monitoring thread")
+
+        # Start async quote tweet thread (proactive reach beyond own followers)
+        if enable_quotes:
+            from src.engagement.quote_tweeter import QuoteTweeter
+            quote_tweeter = QuoteTweeter(twitter, generator, state_manager, max_per_day=max_quotes_per_day)
+            quote_thread = threading.Thread(
+                target=quote_monitoring_loop,
+                args=(quote_tweeter, quote_check_interval, stop_event),
+                daemon=True,
+                name="QuoteTweeter"
+            )
+            quote_thread.start()
+            logger.info("Started async quote tweet thread")
 
         tweet_count = 0
         # Restore recent tweets from persisted state so reply checking resumes after restart
@@ -296,8 +398,8 @@ def main():
                             print(f"    {i}. Score {tweet['score']:.0f}: {tweet['text'][:60]}...")
                     print()
 
-                # Step 3: Generate new tweet (with style learning from top tweets)
-                print("[3/5] Generating new tweet...")
+                # Step 3: Generate new tweet or poll (with style learning)
+                print("[3/5] Generating new content...")
 
                 # Check if we have enough data for style learning
                 has_style_data = len(engagement_tracker.tracked_tweets) >= 2
@@ -306,7 +408,26 @@ def main():
                 else:
                     print("  ℹ Style learning: Not enough data yet (need 2+ tweets)")
 
-                tweet = generator.generate_tweet(use_live_data=True, engagement_tracker=engagement_tracker)
+                # Poll cadence: ~2/week. Once the min gap has passed, each daily
+                # cycle has a poll_chance shot at being a poll instead of a tweet.
+                poll_options = None
+                content_type_label = None
+                tweet = None
+                if enable_polls and state_manager.hours_since_last_poll() >= poll_min_gap_hours \
+                        and random.random() < poll_chance:
+                    print("  🗳 Poll day — generating a poll...")
+                    poll = generator.generate_poll()
+                    if poll:
+                        tweet = poll["question"]
+                        poll_options = poll["options"]
+                        content_type_label = "poll"
+                        print(f"  Poll options: {poll_options}")
+                    else:
+                        print("  Poll generation failed — falling back to normal tweet")
+
+                if not tweet:
+                    tweet = generator.generate_tweet(use_live_data=True, engagement_tracker=engagement_tracker)
+                    content_type_label = generator.last_content_type
 
                 if not tweet:
                     logger.error("Failed to generate tweet")
@@ -318,9 +439,9 @@ def main():
                 print(f"  Generated: {tweet[:80]}...")
                 print(f"  Length: {len(tweet)} chars")
 
-                # Step 4: Post tweet
+                # Step 4: Post tweet (with poll options if it's a poll)
                 print("\n[4/5] Posting to X...")
-                result = twitter.post_tweet(tweet)
+                result = twitter.post_tweet(tweet, poll_options=poll_options)
 
                 if result:
                     tweet_id = result.get('id')
@@ -344,21 +465,29 @@ def main():
                     state_manager.update_recent_tweets(recent_tweets)
 
                     # Start tracking engagement (tagged with content type for topic learning)
-                    engagement_tracker.track_tweet(tweet_id, tweet, content_type=generator.last_content_type)
+                    engagement_tracker.track_tweet(tweet_id, tweet, content_type=content_type_label)
+
+                    # Record poll timing so the ~2/week cadence holds
+                    if poll_options:
+                        state_manager.record_poll()
 
                 else:
                     print("  ✗ Failed to post")
                     logger.error("Failed to post tweet")
 
-                # Wait for next cycle
-                next_post_time = time.strftime('%H:%M:%S', time.localtime(time.time() + post_interval_seconds))
+                # Wait for next cycle — smart timing drifts the next post toward
+                # the hour that historically gets the best engagement
+                sleep_seconds = compute_next_post_delay(
+                    post_interval_seconds, engagement_tracker, enabled=enable_smart_timing
+                )
+                next_post_time = time.strftime('%H:%M:%S', time.localtime(time.time() + sleep_seconds))
                 print(f"\n{'='*70}")
                 print(f"Cycle {tweet_count} complete")
-                print(f"Waiting {post_interval_minutes} minutes ({post_interval_minutes/60:.1f} hours) until next cycle...")
+                print(f"Waiting {sleep_seconds/60:.0f} minutes ({sleep_seconds/3600:.1f} hours) until next cycle...")
                 print(f"Next post at: {next_post_time}")
                 print(f"{'='*70}\n")
 
-                time.sleep(post_interval_seconds)
+                time.sleep(sleep_seconds)
 
             except KeyboardInterrupt:
                 print("\n\nStopping bot...")
@@ -389,6 +518,10 @@ def main():
             logger.info("Stopping milestone monitoring thread...")
             milestone_thread.join(timeout=5)
             logger.info("Milestone monitoring thread stopped")
+        if quote_thread and quote_thread.is_alive():
+            logger.info("Stopping quote tweet thread...")
+            quote_thread.join(timeout=5)
+            logger.info("Quote tweet thread stopped")
 
     print()
     print("="*70)
