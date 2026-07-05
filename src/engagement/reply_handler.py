@@ -11,6 +11,7 @@ from src.utils.logger import get_logger
 from src.utils.rate_limiter import SharedReplyRateLimiter
 from src.utils.state_manager import BotStateManager
 from src.utils.live_context import get_live_market_context
+from src.utils.intelligence import get_intelligence
 from src.config.settings import settings
 from src.config.knowledge import get_shared_knowledge
 
@@ -239,9 +240,15 @@ class ReplyHandler:
             Generated reply text or None
         """
         try:
-            # Live data goes in the user prompt so the system prompt stays cacheable
+            # Live data + learned intelligence go in the user prompt so the
+            # system prompt stays cacheable
             live_data = get_live_market_context()
-            live_block = f"{live_data}\n\n" if live_data else ""
+            brief = get_intelligence().get_brief_context()
+            context_block = ""
+            if live_data:
+                context_block += f"{live_data}\n\n"
+            if brief:
+                context_block += f"{brief}\n\n"
 
             prompt = f"""You are replying to a comment on your tweet.
 
@@ -251,7 +258,7 @@ YOUR ORIGINAL TWEET:
 SOMEONE REPLIED:
 @{comment['author_username']}: "{comment['text']}"
 
-{live_block}Generate a short, authentic reply (under 280 chars). Stay in character as PFP - the green frog:
+{context_block}Generate a short, authentic reply (under 280 chars). Stay in character as PFP - the green frog:
 - All lowercase (except tickers like pfp, sol)
 - No emojis
 - Be helpful, cheeky, or insightful depending on the comment

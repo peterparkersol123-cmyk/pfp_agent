@@ -157,6 +157,15 @@ def raid_monitoring_loop(account_monitor, quote_tweeter, check_interval_minutes=
                 print(f"\n  ⚔️ RAID: {stats['liked']} liked, {stats['replied']} replied, "
                       f"{stats['quoted']} quoted, {stats['retweeted']} retweeted")
 
+            # Fold what we just interacted with into the persistent brain
+            # (rate-limited internally — a real Claude update only every ~6h)
+            try:
+                from src.utils.intelligence import get_intelligence
+                if get_intelligence().update():
+                    print("  🧠 Intelligence brief refreshed from recent activity")
+            except Exception as e:
+                logger.warning(f"Intelligence update skipped: {e}")
+
             for _ in range(check_interval_minutes * 60):
                 if stop_event and stop_event.is_set():
                     break

@@ -14,6 +14,7 @@ from src.utils.rate_limiter import SharedReplyRateLimiter
 from src.utils.state_manager import BotStateManager
 from src.utils.live_context import get_live_market_context
 from src.utils.recall import recall_relevant_learnings
+from src.utils.intelligence import get_intelligence
 from src.config.settings import settings
 from src.config.knowledge import get_shared_knowledge
 
@@ -408,6 +409,11 @@ class MentionHandler:
             recalled = recall_relevant_learnings(f"{original_tweet_context or ''} {mention_text}")
             if recalled:
                 dynamic_context_parts.append(recalled)
+
+            # What the bot has learned about the scene over time
+            brief = get_intelligence().get_brief_context()
+            if brief:
+                dynamic_context_parts.append(brief)
 
             if self.state_manager:
                 history = self.state_manager.get_user_history(author)
