@@ -308,6 +308,44 @@ class TwitterClient:
             logger.warning(f"Error retweeting {tweet_id}: {e}")
             return False
 
+    def get_following(self, max_accounts: int = 500) -> List[str]:
+        """
+        Get the usernames the bot account follows. Used to auto-source raid
+        targets so the list is managed by following/unfollowing on X rather
+        than a hardcoded env var. Paginated; capped at max_accounts.
+
+        Returns:
+            List of usernames (without @). Empty on failure.
+        """
+        try:
+            me = self.client.get_me(user_auth=True)
+            if not me or not me.data:
+                logger.warning("get_following: could not resolve bot user id")
+                return []
+            uid = me.data.id
+
+            usernames: List[str] = []
+            pagination_token = None
+            while len(usernames) < max_accounts:
+                resp = self.client.get_users_following(
+                    id=uid,
+                    max_results=1000,
+                    pagination_token=pagination_token,
+                    user_auth=True,
+                )
+                if resp.data:
+                    usernames.extend(u.username for u in resp.data)
+                pagination_token = (resp.meta or {}).get("next_token")
+                if not pagination_token:
+                    break
+
+            logger.info(f"Fetched {len(usernames)} followed accounts for raid targeting")
+            return usernames[:max_accounts]
+
+        except Exception as e:
+            logger.warning(f"get_following failed (tier may not permit, or rate limited): {e}")
+            return []
+
     def get_me(self) -> Optional[Dict[str, Any]]:
         """
         Get authenticated user information.

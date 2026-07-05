@@ -148,7 +148,9 @@ def raid_monitoring_loop(account_monitor, quote_tweeter, check_interval_minutes=
     while not (stop_event and stop_event.is_set()):
         try:
             stats = account_monitor.raid_accounts(
-                look_back_minutes=check_interval_minutes * 2 + 30,
+                # generous look-back so rotation across a large follow list
+                # doesn't miss tweets (dedup prevents double engagement)
+                look_back_minutes=max(check_interval_minutes * 2 + 30, 360),
                 quote_tweeter=quote_tweeter,
                 max_likes_per_day=max_likes_per_day,
                 max_retweets_per_day=max_retweets_per_day,
@@ -293,6 +295,8 @@ def main():
     # Get monitored accounts (comma-separated usernames)
     monitored_accounts_str = os.getenv('MONITORED_ACCOUNTS', '')
     monitored_accounts = [acc.strip().lstrip('@') for acc in monitored_accounts_str.split(',') if acc.strip()]
+    # Auto-source raid targets from who the bot follows (manage the list on X)
+    monitor_following = os.getenv('MONITOR_FOLLOWING', 'False').lower() == 'true'
 
     print("\n" + "="*70)
     print("PFP BOT (@PumpfunPepe_AI) - PRODUCTION MODE")
@@ -311,7 +315,8 @@ def main():
     print(f"  Smart Timing: {'Enabled (posts drift to best engagement hour)' if enable_smart_timing else 'Disabled'}")
     print(f"  Community Posting: {'Enabled (community ' + community_id + ', ' + str(int(community_post_chance*100)) + '% of daily posts)' if community_id else 'Disabled (set X_COMMUNITY_ID to enable)'}")
     print(f"  Raid Engine: {'Enabled (every ' + str(raid_check_interval) + ' min, max ' + str(max_likes_per_day) + ' likes/day)' if enable_raids and monitored_accounts else 'Disabled'}")
-    print(f"  Monitored Accounts: {len(monitored_accounts)} accounts")
+    print(f"  Monitored Accounts: {len(monitored_accounts)} explicit"
+          f"{' + accounts you follow' if monitor_following else ''}")
     if monitored_accounts:
         for acc in monitored_accounts:
             print(f"    - @{acc}")
@@ -342,7 +347,7 @@ def main():
         rate_limiter = SharedReplyRateLimiter(max_replies_per_hour=max_total_replies_per_hour) if enable_replies else None
 
         reply_handler = ReplyHandler(twitter, max_replies_per_tweet=max_replies_per_tweet, rate_limiter=rate_limiter, state_manager=state_manager) if enable_replies else None
-        account_monitor = AccountMonitor(twitter, target_usernames=monitored_accounts, rate_limiter=rate_limiter, state_manager=state_manager) if monitored_accounts else None
+        account_monitor = AccountMonitor(twitter, target_usernames=monitored_accounts, rate_limiter=rate_limiter, state_manager=state_manager) if (monitored_accounts or monitor_following) else None
         mention_handler = MentionHandler(twitter, rate_limiter=rate_limiter, state_manager=state_manager) if enable_replies else None
 
         # Confirm which Twitter account we're authenticated as

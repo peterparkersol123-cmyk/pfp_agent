@@ -72,6 +72,13 @@ class Settings:
     # actual back-and-forth when someone keeps engaging (was hardcoded to 1).
     MAX_CONVERSATION_TURNS: int = int(os.getenv("MAX_CONVERSATION_TURNS", "3"))
 
+    # Raid targeting: when True, the raid list is auto-sourced from the accounts
+    # the bot follows (manage it by following/unfollowing on X — no redeploy),
+    # merged with any explicit MONITORED_ACCOUNTS. Capped + rotated for quota.
+    MONITOR_FOLLOWING: bool = os.getenv("MONITOR_FOLLOWING", "False").lower() == "true"
+    MAX_RAID_ACCOUNTS: int = int(os.getenv("MAX_RAID_ACCOUNTS", "40"))
+    FOLLOWING_REFRESH_HOURS: int = int(os.getenv("FOLLOWING_REFRESH_HOURS", "12"))
+
     # Blocklist - Users to never reply to or engage with
     BLOCKED_USERNAMES: set = {
         "armoskii",  # Requested to be blocked

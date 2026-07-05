@@ -69,10 +69,68 @@ class AccountMonitor:
         # username -> user id, so repeated timeline checks don't re-resolve
         self._user_id_cache: Dict[str, str] = {}
 
+        # Auto-source raid targets from who the bot follows (managed on X, not
+        # via env). Merged with explicit target_usernames, capped + rotated.
+        self.monitor_following = settings.MONITOR_FOLLOWING
+        self.max_raid_accounts = settings.MAX_RAID_ACCOUNTS
+        self.following_refresh_hours = settings.FOLLOWING_REFRESH_HOURS
+        self._cached_following: List[str] = []
+        self._following_refreshed_at: Optional[datetime] = None
+        self._raid_offset = 0  # rotation cursor for large target lists
+
         logger.info(
-            f"Initialized AccountMonitor for {len(self.target_usernames)} accounts "
-            f"(replies {'enabled' if self.replies_enabled else 'DISABLED — learn-only'})"
+            f"Initialized AccountMonitor for {len(self.target_usernames)} explicit accounts "
+            f"(following-sourced: {self.monitor_following}, "
+            f"replies {'enabled' if self.replies_enabled else 'DISABLED — learn-only'})"
         )
+
+    def _maybe_refresh_following(self) -> None:
+        """Refresh the cached following list if it's stale (or never fetched)."""
+        now = datetime.now(timezone.utc)
+        fresh = (
+            self._cached_following
+            and self._following_refreshed_at
+            and (now - self._following_refreshed_at) < timedelta(hours=self.following_refresh_hours)
+        )
+        if fresh:
+            return
+        following = self.twitter_client.get_following(max_accounts=self.max_raid_accounts * 4)
+        if following:
+            self._cached_following = [
+                u for u in following if u.lower() not in settings.BLOCKED_USERNAMES
+            ]
+            self._following_refreshed_at = now
+            logger.info(f"Raid targets refreshed from following: {len(self._cached_following)} accounts")
+        elif not self._cached_following:
+            logger.warning("Following list empty/unavailable — falling back to explicit accounts only")
+
+    def get_active_targets(self) -> List[str]:
+        """
+        The accounts to raid this pass: explicit MONITORED_ACCOUNTS plus (if
+        enabled) the accounts the bot follows, deduped. If the combined list
+        exceeds max_raid_accounts, rotate through it across passes so every
+        account gets covered without blowing the X API read quota.
+        """
+        targets: List[str] = list(self.target_usernames)
+        seen = {u.lower() for u in targets}
+
+        if self.monitor_following:
+            self._maybe_refresh_following()
+            for u in self._cached_following:
+                if u.lower() not in seen:
+                    targets.append(u)
+                    seen.add(u.lower())
+
+        if len(targets) <= self.max_raid_accounts:
+            return targets
+
+        # Rotate a window of max_raid_accounts through the full list
+        n = self.max_raid_accounts
+        start = self._raid_offset % len(targets)
+        window = (targets + targets)[start:start + n]
+        self._raid_offset = (start + n) % len(targets)
+        logger.debug(f"Raid rotation: window {start}..{start+n} of {len(targets)} targets")
+        return window
 
     def get_recent_tweets_from_user(self, username: str, minutes_ago: int = 120) -> List[Dict]:
         """
@@ -341,12 +399,16 @@ If they mention pfp or the community - be EXTREMELY positive and supportive."""
             Stats dict: {"seen", "liked", "replied", "quoted", "retweeted"}
         """
         stats = {"seen": 0, "liked": 0, "replied": 0, "quoted": 0, "retweeted": 0}
-        if not self.target_usernames or not self.state_manager:
+        if not self.state_manager:
+            return stats
+
+        targets = self.get_active_targets()
+        if not targets:
             return stats
 
         quote_candidates = []
 
-        for username in self.target_usernames:
+        for username in targets:
             try:
                 tweets = self.get_recent_tweets_from_user(username, look_back_minutes)
                 replied_this_account = False
