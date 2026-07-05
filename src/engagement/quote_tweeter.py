@@ -58,17 +58,25 @@ class QuoteTweeter:
     # Guards
     # ------------------------------------------------------------------
 
-    def _can_quote_now(self) -> bool:
+    def _can_quote_now(self, daily_cap: Optional[int] = None, min_gap_hours: float = MIN_GAP_HOURS) -> bool:
+        """
+        Whether a quote is allowed right now under the daily cap and min gap.
+
+        daily_cap defaults to self.max_per_day (the search-quote budget).
+        The monitored-account quote path passes its own (higher) cap and a
+        min_gap of 0 so it can react to several accounts in one raid pass.
+        """
+        cap = self.max_per_day if daily_cap is None else daily_cap
         recent = self.state_manager.quotes_in_last_hours(24)
-        if len(recent) >= self.max_per_day:
-            logger.debug("Quote quota reached for the last 24h")
+        if len(recent) >= cap:
+            logger.debug(f"Quote quota reached for the last 24h ({len(recent)}/{cap})")
             return False
-        if recent:
+        if recent and min_gap_hours > 0:
             try:
                 last = max(datetime.fromisoformat(q["at"]) for q in recent)
                 gap_hours = (datetime.now(timezone.utc) - last).total_seconds() / 3600
-                if gap_hours < MIN_GAP_HOURS:
-                    logger.debug(f"Quote min gap not elapsed ({gap_hours:.1f}h < {MIN_GAP_HOURS}h)")
+                if gap_hours < min_gap_hours:
+                    logger.debug(f"Quote min gap not elapsed ({gap_hours:.1f}h < {min_gap_hours}h)")
                     return False
             except (KeyError, ValueError):
                 pass
@@ -201,32 +209,36 @@ class QuoteTweeter:
     # Quote a specific tweet (used by the raid engine)
     # ------------------------------------------------------------------
 
-    def quote_specific(self, tweet: Dict) -> bool:
+    def quote_specific(self, tweet: Dict, daily_cap: Optional[int] = None,
+                       min_gap_hours: float = MIN_GAP_HOURS) -> str:
         """
         Quote-tweet a specific tweet (e.g. a monitored account's fresh post).
-        Shares the same caps as search-based quoting: daily max, min gap,
-        never the same tweet twice, never the same author twice in 24h.
-        Skips authors X's engagement gate has rejected (persisted, 7-day retry).
+        Skips the same tweet twice, the same author twice in 24h, and authors
+        X's engagement gate has rejected (persisted, 7-day retry).
 
         Args:
-            tweet: dict with 'id', 'text', 'author_username' (and optionally
-                'likes'/'author_followers' for prompt context)
+            tweet: dict with 'id', 'text', 'author_username'
+            daily_cap: override the daily quote budget for this call
+            min_gap_hours: override the min gap between quotes for this call
 
         Returns:
-            True if a quote tweet was posted
+            "ok"       — quote posted
+            "blocked"  — X's engagement gate rejected it (author now blocked)
+            "skip"     — cap/gap/dedup prevented it (try a retweet instead)
+            "error"    — generation or non-policy post failure
         """
-        if not self._can_quote_now():
-            return False
+        if not self._can_quote_now(daily_cap=daily_cap, min_gap_hours=min_gap_hours):
+            return "skip"
         if str(tweet['id']) in self.state_manager.quoted_tweet_ids():
-            return False
+            return "skip"
         author = tweet['author_username']
         if self.state_manager.is_reply_blocked(author):
             logger.debug(f"QuoteTweeter: @{author} is engagement-blocked, skipping quote")
-            return False
+            return "blocked"
         recently_quoted = {q.get("author") for q in self.state_manager.quotes_in_last_hours(24)}
         if author.lower().lstrip("@") in recently_quoted:
             logger.debug(f"QuoteTweeter: already quoted @{author} in last 24h")
-            return False
+            return "skip"
 
         prompt = (
             f"You're QUOTE-TWEETING this fresh post from @{author} — an account your "
@@ -245,15 +257,15 @@ class QuoteTweeter:
         comment = self.generator.generate_tweet(custom_prompt=prompt, use_live_data=False)
         if not comment:
             logger.warning(f"QuoteTweeter: failed to generate comment for @{author}")
-            return False
+            return "error"
 
         status = self._post_quote(comment, tweet['id'], author)
         if status != "ok":
-            return False
+            return status  # "blocked" or "error"
 
         self.state_manager.record_quote(str(tweet['id']), author)
         logger.info(f"✓ Quote-tweeted @{author} (raid): {comment[:60]}...")
-        return True
+        return "ok"
 
     # ------------------------------------------------------------------
     # Run

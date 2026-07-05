@@ -318,7 +318,8 @@ If they mention pfp or the community - be EXTREMELY positive and supportive."""
         look_back_minutes: int = 180,
         quote_tweeter=None,
         max_likes_per_day: int = 20,
-        max_retweets_per_day: int = 2
+        max_retweets_per_day: int = 6,
+        max_monitored_quotes_per_day: int = 5
     ) -> Dict[str, int]:
         """
         Raid pass over monitored accounts — engage fresh tweets fast:
@@ -395,24 +396,51 @@ If they mention pfp or the community - be EXTREMELY positive and supportive."""
                 logger.error(f"Error raiding @{username}: {e}")
                 continue
 
-        # Amplify the strongest tweet of the batch. Quote-tweet if X's
-        # engagement gate allows it for that author; otherwise plain retweet
-        # (always allowed) so the bot still shows up on the post.
+        # Amplify each account's newest new tweet. Quote-tweet it if X's
+        # engagement gate allows that author; otherwise plain retweet (always
+        # allowed) so the bot still shows up on the post. One amplification
+        # per account per pass so the timeline doesn't get spammy.
         if quote_candidates:
-            quote_candidates.sort(key=lambda t: t.get('likes', 0) * 2 + t.get('retweets', 0) * 3, reverse=True)
+            # Best (highest-engagement) new tweet per author
+            best_by_author: Dict[str, Dict] = {}
+            for t in quote_candidates:
+                key = t['author_username'].lower()
+                score = t.get('likes', 0) * 2 + t.get('retweets', 0) * 3
+                if key not in best_by_author or score > (
+                    best_by_author[key].get('likes', 0) * 2 + best_by_author[key].get('retweets', 0) * 3
+                ):
+                    best_by_author[key] = t
 
-            if quote_tweeter:
-                for candidate in quote_candidates[:3]:  # try top 3 (caps may skip some)
-                    if quote_tweeter.quote_specific(candidate):
+            # Process highest-engagement accounts first
+            ordered = sorted(
+                best_by_author.values(),
+                key=lambda t: t.get('likes', 0) * 2 + t.get('retweets', 0) * 3,
+                reverse=True,
+            )
+
+            for candidate in ordered:
+                quoted = False
+                if quote_tweeter:
+                    status = quote_tweeter.quote_specific(
+                        candidate,
+                        daily_cap=max_monitored_quotes_per_day,
+                        min_gap_hours=0,  # react to multiple accounts in one pass
+                    )
+                    if status == "ok":
                         stats["quoted"] += 1
-                        break
+                        quoted = True
+                    elif status == "skip":
+                        # Daily quote cap hit — stop trying to quote, but
+                        # retweets can still amplify the rest
+                        pass
 
-            if not stats["quoted"] and self.state_manager.retweets_in_last_24h() < max_retweets_per_day:
-                best = quote_candidates[0]
-                if self.twitter_client.retweet_tweet(str(best['id'])):
-                    self.state_manager.record_retweet()
-                    stats["retweeted"] += 1
-                    logger.info(f"✓ Retweeted @{best['author_username']} (quote gate closed)")
+                # Retweet fallback when we couldn't quote (gate-blocked, capped,
+                # or no quote_tweeter). Always allowed by X.
+                if not quoted and self.state_manager.retweets_in_last_24h() < max_retweets_per_day:
+                    if self.twitter_client.retweet_tweet(str(candidate['id'])):
+                        self.state_manager.record_retweet()
+                        stats["retweeted"] += 1
+                        logger.info(f"✓ Retweeted @{candidate['author_username']}")
 
         if any(stats.values()):
             logger.info(

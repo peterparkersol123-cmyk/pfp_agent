@@ -131,7 +131,8 @@ def milestone_monitoring_loop(watcher, generator, twitter, engagement_tracker,
 
 
 def raid_monitoring_loop(account_monitor, quote_tweeter, check_interval_minutes=120,
-                         max_likes_per_day=20, max_retweets_per_day=2, stop_event=None):
+                         max_likes_per_day=20, max_retweets_per_day=6,
+                         max_monitored_quotes_per_day=5, stop_event=None):
     """
     Fast engagement loop over monitored accounts ("raiding"): likes every
     fresh tweet, replies/quotes where X's engagement gate permits, and
@@ -150,6 +151,7 @@ def raid_monitoring_loop(account_monitor, quote_tweeter, check_interval_minutes=
                 quote_tweeter=quote_tweeter,
                 max_likes_per_day=max_likes_per_day,
                 max_retweets_per_day=max_retweets_per_day,
+                max_monitored_quotes_per_day=max_monitored_quotes_per_day,
             )
             if any(stats.get(k) for k in ("liked", "replied", "quoted", "retweeted")):
                 print(f"\n  ⚔️ RAID: {stats['liked']} liked, {stats['replied']} replied, "
@@ -272,7 +274,8 @@ def main():
     enable_raids = os.getenv('ENABLE_RAIDS', 'True').lower() == 'true'
     raid_check_interval = int(os.getenv('RAID_CHECK_INTERVAL_MINUTES', '120'))
     max_likes_per_day = int(os.getenv('MAX_LIKES_PER_DAY', '20'))
-    max_retweets_per_day = int(os.getenv('MAX_RETWEETS_PER_DAY', '2'))
+    max_retweets_per_day = int(os.getenv('MAX_RETWEETS_PER_DAY', '6'))
+    max_monitored_quotes_per_day = int(os.getenv('MAX_MONITORED_QUOTES_PER_DAY', '5'))
 
     # Get monitored accounts (comma-separated usernames)
     monitored_accounts_str = os.getenv('MONITORED_ACCOUNTS', '')
@@ -390,7 +393,8 @@ def main():
             raid_thread = threading.Thread(
                 target=raid_monitoring_loop,
                 args=(account_monitor, quote_tweeter, raid_check_interval,
-                      max_likes_per_day, max_retweets_per_day, stop_event),
+                      max_likes_per_day, max_retweets_per_day,
+                      max_monitored_quotes_per_day, stop_event),
                 daemon=True,
                 name="RaidEngine"
             )
