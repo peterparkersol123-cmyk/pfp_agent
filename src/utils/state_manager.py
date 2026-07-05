@@ -83,6 +83,9 @@ class BotStateManager:
         # (username -> iso timestamp of the rejection; retried after 7 days)
         self.raided_tweet_ids: Set[str] = set(state.get("raided_tweet_ids", []))
         self.like_times: List[str] = state.get("like_times", [])
+        self.retweet_times: List[str] = state.get("retweet_times", [])
+        # Authors X's engagement gate rejects for replies AND quotes
+        # (username -> iso timestamp; retried after 7 days)
         self.reply_blocked_authors: Dict[str, str] = state.get("reply_blocked_authors", {})
 
         logger.info(
@@ -124,6 +127,7 @@ class BotStateManager:
                 "last_poll_at": self.last_poll_at,
                 "raided_tweet_ids": list(self.raided_tweet_ids)[-2000:],
                 "like_times": self.like_times[-100:],
+                "retweet_times": self.retweet_times[-50:],
                 "reply_blocked_authors": self.reply_blocked_authors,
                 "last_saved": datetime.now(timezone.utc).isoformat(),
             }
@@ -256,17 +260,38 @@ class BotStateManager:
                 continue
         return count
 
+    def record_retweet(self):
+        """Record a retweet for the daily cap."""
+        self.retweet_times.append(datetime.now(timezone.utc).isoformat())
+        self._save()
+
+    def retweets_in_last_24h(self) -> int:
+        from datetime import timedelta
+        cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
+        count = 0
+        for ts in self.retweet_times:
+            try:
+                if datetime.fromisoformat(ts) > cutoff:
+                    count += 1
+            except ValueError:
+                continue
+        return count
+
     def mark_reply_blocked(self, username: str):
-        """X rejected a reply to this author (hasn't engaged the bot)."""
+        """
+        X's engagement gate rejected a reply OR quote toward this author
+        (they haven't engaged the bot). The same gate covers both actions,
+        so one rejection marks the author for both.
+        """
         self.reply_blocked_authors[username.lower().lstrip("@")] = \
             datetime.now(timezone.utc).isoformat()
         self._save()
 
     def is_reply_blocked(self, username: str, retry_days: int = 7) -> bool:
         """
-        True if replies to this author were rejected recently. Auto-expires
-        after retry_days — if the account has engaged the bot since (e.g. an
-        allied account followed/mentioned it), replies unlock on retry.
+        True if replies/quotes to this author were rejected recently.
+        Auto-expires after retry_days — if the account has engaged the bot
+        since (e.g. an allied account mentioned it), it unlocks on retry.
         """
         from datetime import timedelta
         blocked_at = self.reply_blocked_authors.get(username.lower().lstrip("@"))

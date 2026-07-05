@@ -84,6 +84,38 @@ class QuoteTweeter:
                 logger.warning(f"QuoteTweeter: could not resolve bot user id: {e}")
         return self._bot_user_id
 
+    def _post_quote(self, comment: str, tweet_id: str, author: str) -> str:
+        """
+        Post a quote tweet, detecting X's engagement-gate rejection.
+
+        X blocks quoting posts from authors who haven't engaged the bot
+        (same policy as replies). A rejection marks the author blocked for
+        7 days (persisted) so no more Claude calls are wasted on them.
+
+        Returns:
+            "ok", "blocked", or "error"
+        """
+        if not self.twitter_client.should_post:
+            logger.info(f"[DEBUG MODE] Would quote-tweet {tweet_id}: {comment[:60]}")
+            return "ok"
+        try:
+            resp = self.twitter_client.client.create_tweet(
+                text=comment,
+                quote_tweet_id=str(tweet_id),
+                user_auth=True
+            )
+            if resp.data:
+                return "ok"
+            return "error"
+        except Exception as e:
+            msg = str(e).lower()
+            if "not allowed" in msg or "not been mentioned" in msg or "not part of the conversation" in msg:
+                self.state_manager.mark_reply_blocked(author)
+                logger.info(f"@{author} quote-blocked by X engagement gate — marked for 7 days")
+                return "blocked"
+            logger.error(f"QuoteTweeter: error posting quote: {e}")
+            return "error"
+
     # ------------------------------------------------------------------
     # Candidate search
     # ------------------------------------------------------------------
@@ -124,6 +156,9 @@ class QuoteTweeter:
             if not author:
                 continue
             username = author.username.lower()
+            # Skip authors X's engagement gate already rejected (no Claude waste)
+            if self.state_manager.is_reply_blocked(username):
+                continue
             text = tweet.text or ""
             metrics = tweet.public_metrics or {}
             likes = metrics.get('like_count', 0)
@@ -171,6 +206,7 @@ class QuoteTweeter:
         Quote-tweet a specific tweet (e.g. a monitored account's fresh post).
         Shares the same caps as search-based quoting: daily max, min gap,
         never the same tweet twice, never the same author twice in 24h.
+        Skips authors X's engagement gate has rejected (persisted, 7-day retry).
 
         Args:
             tweet: dict with 'id', 'text', 'author_username' (and optionally
@@ -184,6 +220,9 @@ class QuoteTweeter:
         if str(tweet['id']) in self.state_manager.quoted_tweet_ids():
             return False
         author = tweet['author_username']
+        if self.state_manager.is_reply_blocked(author):
+            logger.debug(f"QuoteTweeter: @{author} is engagement-blocked, skipping quote")
+            return False
         recently_quoted = {q.get("author") for q in self.state_manager.quotes_in_last_hours(24)}
         if author.lower().lstrip("@") in recently_quoted:
             logger.debug(f"QuoteTweeter: already quoted @{author} in last 24h")
@@ -208,9 +247,8 @@ class QuoteTweeter:
             logger.warning(f"QuoteTweeter: failed to generate comment for @{author}")
             return False
 
-        result = self.twitter_client.post_tweet(comment, quote_tweet_id=str(tweet['id']))
-        if not result:
-            logger.error(f"QuoteTweeter: failed to post quote of @{author}")
+        status = self._post_quote(comment, tweet['id'], author)
+        if status != "ok":
             return False
 
         self.state_manager.record_quote(str(tweet['id']), author)
@@ -221,10 +259,14 @@ class QuoteTweeter:
     # Run
     # ------------------------------------------------------------------
 
-    def run_once(self) -> bool:
+    def run_once(self, max_generation_attempts: int = 2) -> bool:
         """
-        One quote-tweet attempt: search, pick the best candidate, generate an
-        in-character take, post. Returns True if a quote tweet was posted.
+        One quote-tweet attempt: search, then work down the candidate list.
+        If X's engagement gate rejects a candidate's author, that author is
+        marked blocked (persisted) and the next candidate is tried — capped
+        at max_generation_attempts Claude calls per run so cost stays bounded.
+
+        Returns True if a quote tweet was posted.
         """
         if not self._can_quote_now():
             return False
@@ -233,33 +275,35 @@ class QuoteTweeter:
         if not candidates:
             return False
 
-        best = candidates[0]
-        prompt = (
-            f"You're QUOTE-TWEETING this post from @{best['author_username']} "
-            f"({best['author_followers']:,} followers, {best['likes']} likes):\n\n"
-            f"\"{best['text']}\"\n\n"
-            f"Write the quote-tweet comment. Rules:\n"
-            f"- Under 200 characters, 1-2 lines\n"
-            f"- Add a TAKE - agree with a twist, extend the thought, or drop frog wisdom on it. "
-            f"Never just restate their point\n"
-            f"- Their audience will see this - be the smartest, funniest account in the room\n"
-            f"- Tie to pfp/the flywheel/the community ONLY if it fits naturally - forced shilling "
-            f"in quote tweets reads desperate\n"
-            f"- No @ mentions, no hashtags, no emojis, all lowercase"
-        )
+        for best in candidates[:max_generation_attempts]:
+            prompt = (
+                f"You're QUOTE-TWEETING this post from @{best['author_username']} "
+                f"({best['author_followers']:,} followers, {best['likes']} likes):\n\n"
+                f"\"{best['text']}\"\n\n"
+                f"Write the quote-tweet comment. Rules:\n"
+                f"- Under 200 characters, 1-2 lines\n"
+                f"- Add a TAKE - agree with a twist, extend the thought, or drop frog wisdom on it. "
+                f"Never just restate their point\n"
+                f"- Their audience will see this - be the smartest, funniest account in the room\n"
+                f"- Tie to pfp/the flywheel/the community ONLY if it fits naturally - forced shilling "
+                f"in quote tweets reads desperate\n"
+                f"- No @ mentions, no hashtags, no emojis, all lowercase"
+            )
 
-        comment = self.generator.generate_tweet(custom_prompt=prompt, use_live_data=False)
-        if not comment:
-            logger.warning("QuoteTweeter: failed to generate comment")
-            return False
+            comment = self.generator.generate_tweet(custom_prompt=prompt, use_live_data=False)
+            if not comment:
+                logger.warning("QuoteTweeter: failed to generate comment")
+                return False
 
-        result = self.twitter_client.post_tweet(comment, quote_tweet_id=best['id'])
-        if not result:
-            logger.error("QuoteTweeter: failed to post quote tweet")
-            return False
+            status = self._post_quote(comment, best['id'], best['author_username'])
+            if status == "ok":
+                self.state_manager.record_quote(best['id'], best['author_username'])
+                logger.info(
+                    f"✓ Quote-tweeted @{best['author_username']} ({best['likes']} likes): {comment[:60]}..."
+                )
+                return True
+            if status == "blocked":
+                continue  # author marked, try next candidate
+            return False  # non-policy error — stop this run
 
-        self.state_manager.record_quote(best['id'], best['author_username'])
-        logger.info(
-            f"✓ Quote-tweeted @{best['author_username']} ({best['likes']} likes): {comment[:60]}..."
-        )
-        return True
+        return False

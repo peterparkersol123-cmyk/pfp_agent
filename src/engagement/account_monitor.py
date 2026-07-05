@@ -317,25 +317,29 @@ If they mention pfp or the community - be EXTREMELY positive and supportive."""
         self,
         look_back_minutes: int = 180,
         quote_tweeter=None,
-        max_likes_per_day: int = 20
+        max_likes_per_day: int = 20,
+        max_retweets_per_day: int = 2
     ) -> Dict[str, int]:
         """
         Raid pass over monitored accounts — engage fresh tweets fast:
 
         1. LIKE every new tweet (allowed by X, no Claude cost, daily cap)
         2. REPLY where X permits it — a reply attempt that 403s marks the
-           author reply-blocked for 7 days (persisted), so at most one Claude
+           author blocked for 7 days (persisted), so at most one Claude
            call is wasted per account per week. Accounts that engage the bot
-           (follow/mention) unlock automatically on the weekly retry.
-        3. QUOTE-TWEET the best tweet of the batch (shares QuoteTweeter caps)
-        4. Save everything to the knowledge base (learning stays free)
+           (mention it) unlock automatically on the weekly retry.
+        3. QUOTE-TWEET the best tweet of the batch (X gates quotes behind the
+           same engagement rule as replies — blocked authors are skipped)
+        4. RETWEET the best tweet when quoting isn't possible — retweets are
+           always allowed, keeping the bot present on big accounts' posts
+        5. Save everything to the knowledge base (learning stays free)
 
         Requires a state_manager (dedup + caps are persistent).
 
         Returns:
-            Stats dict: {"seen": n, "liked": n, "replied": n, "quoted": n}
+            Stats dict: {"seen", "liked", "replied", "quoted", "retweeted"}
         """
-        stats = {"seen": 0, "liked": 0, "replied": 0, "quoted": 0}
+        stats = {"seen": 0, "liked": 0, "replied": 0, "quoted": 0, "retweeted": 0}
         if not self.target_usernames or not self.state_manager:
             return stats
 
@@ -391,19 +395,29 @@ If they mention pfp or the community - be EXTREMELY positive and supportive."""
                 logger.error(f"Error raiding @{username}: {e}")
                 continue
 
-        # Quote the strongest tweet of the batch (visibility play — reaches
-        # the monitored account's audience even when replies are blocked)
-        if quote_tweeter and quote_candidates:
+        # Amplify the strongest tweet of the batch. Quote-tweet if X's
+        # engagement gate allows it for that author; otherwise plain retweet
+        # (always allowed) so the bot still shows up on the post.
+        if quote_candidates:
             quote_candidates.sort(key=lambda t: t.get('likes', 0) * 2 + t.get('retweets', 0) * 3, reverse=True)
-            for candidate in quote_candidates[:3]:  # try top 3 (caps may skip some)
-                if quote_tweeter.quote_specific(candidate):
-                    stats["quoted"] += 1
-                    break
+
+            if quote_tweeter:
+                for candidate in quote_candidates[:3]:  # try top 3 (caps may skip some)
+                    if quote_tweeter.quote_specific(candidate):
+                        stats["quoted"] += 1
+                        break
+
+            if not stats["quoted"] and self.state_manager.retweets_in_last_24h() < max_retweets_per_day:
+                best = quote_candidates[0]
+                if self.twitter_client.retweet_tweet(str(best['id'])):
+                    self.state_manager.record_retweet()
+                    stats["retweeted"] += 1
+                    logger.info(f"✓ Retweeted @{best['author_username']} (quote gate closed)")
 
         if any(stats.values()):
             logger.info(
                 f"Raid pass: {stats['seen']} new tweets, {stats['liked']} liked, "
-                f"{stats['replied']} replied, {stats['quoted']} quoted"
+                f"{stats['replied']} replied, {stats['quoted']} quoted, {stats['retweeted']} retweeted"
             )
         return stats
 

@@ -131,11 +131,12 @@ def milestone_monitoring_loop(watcher, generator, twitter, engagement_tracker,
 
 
 def raid_monitoring_loop(account_monitor, quote_tweeter, check_interval_minutes=120,
-                         max_likes_per_day=20, stop_event=None):
+                         max_likes_per_day=20, max_retweets_per_day=2, stop_event=None):
     """
     Fast engagement loop over monitored accounts ("raiding"): likes every
-    fresh tweet, replies where X permits, and quote-tweets the best one —
-    within minutes-to-hours of them posting instead of once a day.
+    fresh tweet, replies/quotes where X's engagement gate permits, and
+    plain-retweets the best tweet otherwise — within minutes-to-hours of
+    them posting instead of once a day.
 
     Cost: timeline reads per check (user IDs cached), Claude calls only for
     actual replies/quotes, all capped. Learning (knowledge base) is free.
@@ -148,9 +149,11 @@ def raid_monitoring_loop(account_monitor, quote_tweeter, check_interval_minutes=
                 look_back_minutes=check_interval_minutes * 2 + 30,
                 quote_tweeter=quote_tweeter,
                 max_likes_per_day=max_likes_per_day,
+                max_retweets_per_day=max_retweets_per_day,
             )
-            if stats.get("liked") or stats.get("replied") or stats.get("quoted"):
-                print(f"\n  ⚔️ RAID: {stats['liked']} liked, {stats['replied']} replied, {stats['quoted']} quoted")
+            if any(stats.get(k) for k in ("liked", "replied", "quoted", "retweeted")):
+                print(f"\n  ⚔️ RAID: {stats['liked']} liked, {stats['replied']} replied, "
+                      f"{stats['quoted']} quoted, {stats['retweeted']} retweeted")
 
             for _ in range(check_interval_minutes * 60):
                 if stop_event and stop_event.is_set():
@@ -269,6 +272,7 @@ def main():
     enable_raids = os.getenv('ENABLE_RAIDS', 'True').lower() == 'true'
     raid_check_interval = int(os.getenv('RAID_CHECK_INTERVAL_MINUTES', '120'))
     max_likes_per_day = int(os.getenv('MAX_LIKES_PER_DAY', '20'))
+    max_retweets_per_day = int(os.getenv('MAX_RETWEETS_PER_DAY', '2'))
 
     # Get monitored accounts (comma-separated usernames)
     monitored_accounts_str = os.getenv('MONITORED_ACCOUNTS', '')
@@ -386,7 +390,7 @@ def main():
             raid_thread = threading.Thread(
                 target=raid_monitoring_loop,
                 args=(account_monitor, quote_tweeter, raid_check_interval,
-                      max_likes_per_day, stop_event),
+                      max_likes_per_day, max_retweets_per_day, stop_event),
                 daemon=True,
                 name="RaidEngine"
             )

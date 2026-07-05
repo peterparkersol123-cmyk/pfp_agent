@@ -283,6 +283,31 @@ class TwitterClient:
             logger.warning(f"Error liking tweet {tweet_id}: {e}")
             return False
 
+    def retweet_tweet(self, tweet_id: str) -> bool:
+        """
+        Retweet a tweet. Like likes, retweets are allowed by X even toward
+        accounts that haven't engaged the bot (unlike replies and quotes).
+
+        Returns:
+            True if retweeted (or already retweeted)
+        """
+        if not self.should_post:
+            logger.info(f"[DEBUG MODE] Would retweet {tweet_id}")
+            return True
+
+        try:
+            response = self.client.retweet(tweet_id, user_auth=True)
+            if response.data and response.data.get('retweeted'):
+                logger.info(f"Retweeted {tweet_id}")
+                return True
+            return False
+        except Forbidden:
+            logger.debug(f"Could not retweet {tweet_id} (already retweeted or restricted)")
+            return True
+        except Exception as e:
+            logger.warning(f"Error retweeting {tweet_id}: {e}")
+            return False
+
     def get_me(self) -> Optional[Dict[str, Any]]:
         """
         Get authenticated user information.
