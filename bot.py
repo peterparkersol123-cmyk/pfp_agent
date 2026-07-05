@@ -130,6 +130,40 @@ def milestone_monitoring_loop(watcher, generator, twitter, engagement_tracker,
     logger.info("Milestone monitoring thread stopped")
 
 
+def raid_monitoring_loop(account_monitor, quote_tweeter, check_interval_minutes=120,
+                         max_likes_per_day=20, stop_event=None):
+    """
+    Fast engagement loop over monitored accounts ("raiding"): likes every
+    fresh tweet, replies where X permits, and quote-tweets the best one —
+    within minutes-to-hours of them posting instead of once a day.
+
+    Cost: timeline reads per check (user IDs cached), Claude calls only for
+    actual replies/quotes, all capped. Learning (knowledge base) is free.
+    """
+    logger.info(f"Started raid thread (checking monitored accounts every {check_interval_minutes} minutes)")
+
+    while not (stop_event and stop_event.is_set()):
+        try:
+            stats = account_monitor.raid_accounts(
+                look_back_minutes=check_interval_minutes * 2 + 30,
+                quote_tweeter=quote_tweeter,
+                max_likes_per_day=max_likes_per_day,
+            )
+            if stats.get("liked") or stats.get("replied") or stats.get("quoted"):
+                print(f"\n  ⚔️ RAID: {stats['liked']} liked, {stats['replied']} replied, {stats['quoted']} quoted")
+
+            for _ in range(check_interval_minutes * 60):
+                if stop_event and stop_event.is_set():
+                    break
+                time.sleep(1)
+
+        except Exception as e:
+            logger.error(f"Error in raid loop: {e}", exc_info=True)
+            time.sleep(60)
+
+    logger.info("Raid thread stopped")
+
+
 def quote_monitoring_loop(quote_tweeter, check_interval_minutes=240, stop_event=None):
     """
     Periodically look for a high-signal tweet in the bot's niche and
@@ -231,6 +265,10 @@ def main():
     # The bot's account must be a member of the community.
     community_id = os.getenv('X_COMMUNITY_ID', '').strip() or None
     community_post_chance = float(os.getenv('COMMUNITY_POST_CHANCE', '0.3'))
+    # Raid engine: fast engagement on monitored accounts (like/reply/quote)
+    enable_raids = os.getenv('ENABLE_RAIDS', 'True').lower() == 'true'
+    raid_check_interval = int(os.getenv('RAID_CHECK_INTERVAL_MINUTES', '120'))
+    max_likes_per_day = int(os.getenv('MAX_LIKES_PER_DAY', '20'))
 
     # Get monitored accounts (comma-separated usernames)
     monitored_accounts_str = os.getenv('MONITORED_ACCOUNTS', '')
@@ -252,6 +290,7 @@ def main():
     print(f"  Polls: {'Enabled (~2/week)' if enable_polls else 'Disabled'}")
     print(f"  Smart Timing: {'Enabled (posts drift to best engagement hour)' if enable_smart_timing else 'Disabled'}")
     print(f"  Community Posting: {'Enabled (community ' + community_id + ', ' + str(int(community_post_chance*100)) + '% of daily posts)' if community_id else 'Disabled (set X_COMMUNITY_ID to enable)'}")
+    print(f"  Raid Engine: {'Enabled (every ' + str(raid_check_interval) + ' min, max ' + str(max_likes_per_day) + ' likes/day)' if enable_raids and monitored_accounts else 'Disabled'}")
     print(f"  Monitored Accounts: {len(monitored_accounts)} accounts")
     if monitored_accounts:
         for acc in monitored_accounts:
@@ -267,6 +306,7 @@ def main():
     mention_thread = None
     milestone_thread = None
     quote_thread = None
+    raid_thread = None
 
     # Initialize components
     try:
@@ -324,10 +364,14 @@ def main():
             milestone_thread.start()
             logger.info("Started async milestone monitoring thread")
 
-        # Start async quote tweet thread (proactive reach beyond own followers)
+        # Quote tweeter is shared by the search-quote thread and the raid thread
+        quote_tweeter = None
         if enable_quotes:
             from src.engagement.quote_tweeter import QuoteTweeter
             quote_tweeter = QuoteTweeter(twitter, generator, state_manager, max_per_day=max_quotes_per_day)
+
+        # Start async quote tweet thread (proactive reach beyond own followers)
+        if quote_tweeter:
             quote_thread = threading.Thread(
                 target=quote_monitoring_loop,
                 args=(quote_tweeter, quote_check_interval, stop_event),
@@ -336,6 +380,18 @@ def main():
             )
             quote_thread.start()
             logger.info("Started async quote tweet thread")
+
+        # Start async raid thread (fast like/reply/quote on monitored accounts)
+        if enable_raids and account_monitor:
+            raid_thread = threading.Thread(
+                target=raid_monitoring_loop,
+                args=(account_monitor, quote_tweeter, raid_check_interval,
+                      max_likes_per_day, stop_event),
+                daemon=True,
+                name="RaidEngine"
+            )
+            raid_thread.start()
+            logger.info("Started async raid thread")
 
         tweet_count = 0
         # Restore recent tweets from persisted state so reply checking resumes after restart
@@ -350,8 +406,9 @@ def main():
                 print(f"[Cycle {tweet_count}] Starting new posting cycle")
                 print(f"{'='*70}\n")
 
-                # Step 0: Check monitored accounts and reply to their tweets
-                if account_monitor:
+                # Step 0: Check monitored accounts (only when the raid thread
+                # isn't handling them continuously)
+                if account_monitor and not raid_thread:
                     print("[0/5] Checking monitored accounts for new tweets...")
                     replies_to_accounts = account_monitor.check_and_reply_to_accounts(look_back_minutes=post_interval_minutes + 30)
                     if replies_to_accounts > 0:
@@ -536,6 +593,10 @@ def main():
             logger.info("Stopping quote tweet thread...")
             quote_thread.join(timeout=5)
             logger.info("Quote tweet thread stopped")
+        if raid_thread and raid_thread.is_alive():
+            logger.info("Stopping raid thread...")
+            raid_thread.join(timeout=5)
+            logger.info("Raid thread stopped")
 
     print()
     print("="*70)

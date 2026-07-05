@@ -163,6 +163,61 @@ class QuoteTweeter:
         return candidates
 
     # ------------------------------------------------------------------
+    # Quote a specific tweet (used by the raid engine)
+    # ------------------------------------------------------------------
+
+    def quote_specific(self, tweet: Dict) -> bool:
+        """
+        Quote-tweet a specific tweet (e.g. a monitored account's fresh post).
+        Shares the same caps as search-based quoting: daily max, min gap,
+        never the same tweet twice, never the same author twice in 24h.
+
+        Args:
+            tweet: dict with 'id', 'text', 'author_username' (and optionally
+                'likes'/'author_followers' for prompt context)
+
+        Returns:
+            True if a quote tweet was posted
+        """
+        if not self._can_quote_now():
+            return False
+        if str(tweet['id']) in self.state_manager.quoted_tweet_ids():
+            return False
+        author = tweet['author_username']
+        recently_quoted = {q.get("author") for q in self.state_manager.quotes_in_last_hours(24)}
+        if author.lower().lstrip("@") in recently_quoted:
+            logger.debug(f"QuoteTweeter: already quoted @{author} in last 24h")
+            return False
+
+        prompt = (
+            f"You're QUOTE-TWEETING this fresh post from @{author} — an account your "
+            f"community follows closely:\n\n"
+            f"\"{tweet['text']}\"\n\n"
+            f"Write the quote-tweet comment. Rules:\n"
+            f"- Under 200 characters, 1-2 lines\n"
+            f"- Add a TAKE - agree with a twist, extend the thought, or drop frog wisdom on it. "
+            f"Never just restate their point\n"
+            f"- Their audience will see this - be the smartest, funniest account in the room\n"
+            f"- Tie to pfp/the flywheel/the community ONLY if it fits naturally - forced shilling "
+            f"reads desperate\n"
+            f"- No @ mentions, no hashtags, no emojis, all lowercase"
+        )
+
+        comment = self.generator.generate_tweet(custom_prompt=prompt, use_live_data=False)
+        if not comment:
+            logger.warning(f"QuoteTweeter: failed to generate comment for @{author}")
+            return False
+
+        result = self.twitter_client.post_tweet(comment, quote_tweet_id=str(tweet['id']))
+        if not result:
+            logger.error(f"QuoteTweeter: failed to post quote of @{author}")
+            return False
+
+        self.state_manager.record_quote(str(tweet['id']), author)
+        logger.info(f"✓ Quote-tweeted @{author} (raid): {comment[:60]}...")
+        return True
+
+    # ------------------------------------------------------------------
     # Run
     # ------------------------------------------------------------------
 

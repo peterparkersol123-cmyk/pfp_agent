@@ -257,6 +257,32 @@ class TwitterClient:
 
         return posted_tweets
 
+    def like_tweet(self, tweet_id: str) -> bool:
+        """
+        Like a tweet. Cheap engagement — no Claude call, allowed by X even
+        for accounts that haven't engaged the bot (unlike replies).
+
+        Returns:
+            True if liked (or already liked)
+        """
+        if not self.should_post:
+            logger.info(f"[DEBUG MODE] Would like tweet {tweet_id}")
+            return True
+
+        try:
+            response = self.client.like(tweet_id, user_auth=True)
+            if response.data and response.data.get('liked'):
+                logger.info(f"Liked tweet {tweet_id}")
+                return True
+            return False
+        except Forbidden:
+            # Already liked or not likeable — treat as done, don't retry
+            logger.debug(f"Could not like tweet {tweet_id} (already liked or restricted)")
+            return True
+        except Exception as e:
+            logger.warning(f"Error liking tweet {tweet_id}: {e}")
+            return False
+
     def get_me(self) -> Optional[Dict[str, Any]]:
         """
         Get authenticated user information.

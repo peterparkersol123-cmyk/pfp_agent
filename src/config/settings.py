@@ -63,9 +63,10 @@ class Settings:
 
     # Proactively replying to monitored accounts is blocked by X's API unless
     # that account has mentioned/engaged the bot first (403 "reply not allowed").
-    # Off by default so the bot still READS monitored accounts for learning but
-    # doesn't waste Claude calls generating replies that X will reject.
-    ENABLE_MONITORED_REPLIES: bool = os.getenv("ENABLE_MONITORED_REPLIES", "False").lower() == "true"
+    # The raid engine attempts replies but persists 403-blocked authors for
+    # 7 days, so wasted Claude calls are bounded to 1/account/week — and
+    # allied accounts that engage the bot unlock automatically.
+    ENABLE_MONITORED_REPLIES: bool = os.getenv("ENABLE_MONITORED_REPLIES", "True").lower() == "true"
 
     # Max replies the bot posts in one conversation thread. >1 lets it hold an
     # actual back-and-forth when someone keeps engaging (was hardcoded to 1).

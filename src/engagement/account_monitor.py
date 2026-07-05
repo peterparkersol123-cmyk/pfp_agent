@@ -63,7 +63,11 @@ class AccountMonitor:
 
         # Authors that returned a 403 "reply not allowed" — skip them for the
         # rest of this run so we don't burn Claude calls on doomed replies.
+        # (The raid path uses the persistent version in state_manager.)
         self._reply_blocked_authors: Set[str] = set()
+
+        # username -> user id, so repeated timeline checks don't re-resolve
+        self._user_id_cache: Dict[str, str] = {}
 
         logger.info(
             f"Initialized AccountMonitor for {len(self.target_usernames)} accounts "
@@ -82,17 +86,18 @@ class AccountMonitor:
             List of tweet dicts
         """
         try:
-            # Get user ID first
-            user = self.twitter_client.client.get_user(
-                username=username,
-                user_auth=True
-            )
-
-            if not user.data:
-                logger.warning(f"Could not find user: {username}")
-                return []
-
-            user_id = user.data.id
+            # Get user ID (cached — raid checks run frequently)
+            user_id = self._user_id_cache.get(username.lower())
+            if user_id is None:
+                user = self.twitter_client.client.get_user(
+                    username=username,
+                    user_auth=True
+                )
+                if not user.data:
+                    logger.warning(f"Could not find user: {username}")
+                    return []
+                user_id = user.data.id
+                self._user_id_cache[username.lower()] = user_id
 
             # Get recent tweets from this user
             since_time = datetime.now(timezone.utc) - timedelta(minutes=minutes_ago)
@@ -307,6 +312,100 @@ If they mention pfp or the community - be EXTREMELY positive and supportive."""
             logger.error(f"Error posting reply: {e}")
 
         return "error"
+
+    def raid_accounts(
+        self,
+        look_back_minutes: int = 180,
+        quote_tweeter=None,
+        max_likes_per_day: int = 20
+    ) -> Dict[str, int]:
+        """
+        Raid pass over monitored accounts — engage fresh tweets fast:
+
+        1. LIKE every new tweet (allowed by X, no Claude cost, daily cap)
+        2. REPLY where X permits it — a reply attempt that 403s marks the
+           author reply-blocked for 7 days (persisted), so at most one Claude
+           call is wasted per account per week. Accounts that engage the bot
+           (follow/mention) unlock automatically on the weekly retry.
+        3. QUOTE-TWEET the best tweet of the batch (shares QuoteTweeter caps)
+        4. Save everything to the knowledge base (learning stays free)
+
+        Requires a state_manager (dedup + caps are persistent).
+
+        Returns:
+            Stats dict: {"seen": n, "liked": n, "replied": n, "quoted": n}
+        """
+        stats = {"seen": 0, "liked": 0, "replied": 0, "quoted": 0}
+        if not self.target_usernames or not self.state_manager:
+            return stats
+
+        quote_candidates = []
+
+        for username in self.target_usernames:
+            try:
+                tweets = self.get_recent_tweets_from_user(username, look_back_minutes)
+                replied_this_account = False
+
+                for tweet in tweets:
+                    tweet_id = str(tweet['id'])
+                    if self.state_manager.is_raided(tweet_id):
+                        continue
+                    stats["seen"] += 1
+
+                    # Learn from it (free)
+                    self.save_to_knowledge_base(tweet)
+
+                    # Like it (cheap presence, capped per day)
+                    if self.state_manager.likes_in_last_24h() < max_likes_per_day:
+                        if self.twitter_client.like_tweet(tweet_id):
+                            self.state_manager.record_like()
+                            stats["liked"] += 1
+
+                    # Reply if X permits it for this author (persistent 403
+                    # tracking bounds wasted Claude calls to 1/account/week)
+                    if (self.replies_enabled
+                            and not replied_this_account
+                            and not self.state_manager.is_reply_blocked(username)):
+                        can_reply = True
+                        if self.rate_limiter:
+                            can_reply, _ = self.rate_limiter.can_reply()
+                        if can_reply:
+                            reply_text = self.generate_reply(tweet)
+                            if reply_text and len(reply_text) <= 280:
+                                status = self.post_reply(reply_text, tweet_id)
+                                if status == "ok":
+                                    stats["replied"] += 1
+                                    replied_this_account = True
+                                    if self.rate_limiter:
+                                        self.rate_limiter.record_reply()
+                                    logger.info(f"✓ Raid reply to @{username}: {reply_text[:50]}...")
+                                elif status == "blocked":
+                                    self.state_manager.mark_reply_blocked(username)
+                                    logger.info(f"@{username} reply-blocked by X — retrying in 7 days")
+
+                    quote_candidates.append(tweet)
+                    self.state_manager.mark_raided(tweet_id)
+                    time.sleep(1)
+
+            except Exception as e:
+                logger.error(f"Error raiding @{username}: {e}")
+                continue
+
+        # Quote the strongest tweet of the batch (visibility play — reaches
+        # the monitored account's audience even when replies are blocked)
+        if quote_tweeter and quote_candidates:
+            quote_candidates.sort(key=lambda t: t.get('likes', 0) * 2 + t.get('retweets', 0) * 3, reverse=True)
+            for candidate in quote_candidates[:3]:  # try top 3 (caps may skip some)
+                if quote_tweeter.quote_specific(candidate):
+                    stats["quoted"] += 1
+                    break
+
+        if any(stats.values()):
+            logger.info(
+                f"Raid pass: {stats['seen']} new tweets, {stats['liked']} liked, "
+                f"{stats['replied']} replied, {stats['quoted']} quoted"
+            )
+        return stats
 
     def check_and_reply_to_accounts(self, look_back_minutes: int = 120) -> int:
         """

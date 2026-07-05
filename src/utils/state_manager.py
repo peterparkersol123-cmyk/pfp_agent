@@ -78,6 +78,12 @@ class BotStateManager:
         self.quote_history: List[Dict] = state.get("quote_history", [])
         # When the last poll was posted (iso str or None)
         self.last_poll_at: Optional[str] = state.get("last_poll_at")
+        # Raid engine: tweets already processed (liked/considered), like
+        # timestamps for the daily cap, and authors whose replies X rejects
+        # (username -> iso timestamp of the rejection; retried after 7 days)
+        self.raided_tweet_ids: Set[str] = set(state.get("raided_tweet_ids", []))
+        self.like_times: List[str] = state.get("like_times", [])
+        self.reply_blocked_authors: Dict[str, str] = state.get("reply_blocked_authors", {})
 
         logger.info(
             f"Loaded bot state from {self.state_file}: "
@@ -116,6 +122,9 @@ class BotStateManager:
                 "conversation_turns": self.conversation_turns,
                 "quote_history": self.quote_history[-50:],
                 "last_poll_at": self.last_poll_at,
+                "raided_tweet_ids": list(self.raided_tweet_ids)[-2000:],
+                "like_times": self.like_times[-100:],
+                "reply_blocked_authors": self.reply_blocked_authors,
                 "last_saved": datetime.now(timezone.utc).isoformat(),
             }
             tmp_path = self.state_file.with_suffix(".tmp")
@@ -217,6 +226,57 @@ class BotStateManager:
     def quoted_tweet_ids(self) -> set:
         """All tweet IDs we've ever quoted (dedup)."""
         return {q.get("tweet_id") for q in self.quote_history}
+
+    # -------------------------------------------------------------------------
+    # Raid engine (AccountMonitor.raid_accounts)
+    # -------------------------------------------------------------------------
+
+    def mark_raided(self, tweet_id: str):
+        """Record that a monitored-account tweet has been processed."""
+        self.raided_tweet_ids.add(str(tweet_id))
+        self._save()
+
+    def is_raided(self, tweet_id: str) -> bool:
+        return str(tweet_id) in self.raided_tweet_ids
+
+    def record_like(self):
+        """Record a like for the daily cap."""
+        self.like_times.append(datetime.now(timezone.utc).isoformat())
+        self._save()
+
+    def likes_in_last_24h(self) -> int:
+        from datetime import timedelta
+        cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
+        count = 0
+        for ts in self.like_times:
+            try:
+                if datetime.fromisoformat(ts) > cutoff:
+                    count += 1
+            except ValueError:
+                continue
+        return count
+
+    def mark_reply_blocked(self, username: str):
+        """X rejected a reply to this author (hasn't engaged the bot)."""
+        self.reply_blocked_authors[username.lower().lstrip("@")] = \
+            datetime.now(timezone.utc).isoformat()
+        self._save()
+
+    def is_reply_blocked(self, username: str, retry_days: int = 7) -> bool:
+        """
+        True if replies to this author were rejected recently. Auto-expires
+        after retry_days — if the account has engaged the bot since (e.g. an
+        allied account followed/mentioned it), replies unlock on retry.
+        """
+        from datetime import timedelta
+        blocked_at = self.reply_blocked_authors.get(username.lower().lstrip("@"))
+        if not blocked_at:
+            return False
+        try:
+            age = datetime.now(timezone.utc) - datetime.fromisoformat(blocked_at)
+            return age < timedelta(days=retry_days)
+        except ValueError:
+            return False
 
     # -------------------------------------------------------------------------
     # Polls
