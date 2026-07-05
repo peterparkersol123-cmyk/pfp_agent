@@ -67,10 +67,11 @@ class TwitterClient:
         max_retries: int = 3,
         quote_tweet_id: Optional[str] = None,
         poll_options: Optional[List[str]] = None,
-        poll_duration_minutes: int = 1440
+        poll_duration_minutes: int = 1440,
+        community_id: Optional[str] = None
     ) -> Optional[Dict[str, Any]]:
         """
-        Post a tweet to main timeline.
+        Post a tweet to main timeline (or into an X Community).
 
         Args:
             text: Tweet text
@@ -78,6 +79,8 @@ class TwitterClient:
             quote_tweet_id: If set, post as a quote tweet of this tweet
             poll_options: If set (2-4 strings, max 25 chars each), attach a poll
             poll_duration_minutes: Poll duration (default 24h)
+            community_id: If set, post into this X Community (bot account must
+                be a member). Community posts don't support polls.
 
         Returns:
             Tweet data or None if failed
@@ -90,10 +93,17 @@ class TwitterClient:
             logger.warning(f"Tweet exceeds max length ({len(text)} > {self.max_tweet_length})")
             text = text[:self.max_tweet_length - 3] + "..."
 
-        # Build optional create_tweet kwargs (quote tweet / poll)
+        # Build optional create_tweet kwargs (quote tweet / poll / community)
         extra_kwargs = {}
         if quote_tweet_id:
             extra_kwargs["quote_tweet_id"] = quote_tweet_id
+        if community_id:
+            if poll_options:
+                # X doesn't allow polls in community posts — poll wins,
+                # post goes to main timeline instead
+                logger.warning("Polls can't be posted into a community — posting poll to main timeline")
+            else:
+                extra_kwargs["community_id"] = community_id
         if poll_options:
             # X limits: 2-4 options, 25 chars each
             options = [opt[:25] for opt in poll_options[:4]]

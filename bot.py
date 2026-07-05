@@ -226,6 +226,11 @@ def main():
     poll_min_gap_hours = int(os.getenv('POLL_MIN_GAP_HOURS', '72'))
     poll_chance = float(os.getenv('POLL_CHANCE', '0.35'))
     enable_smart_timing = os.getenv('ENABLE_SMART_TIMING', 'True').lower() == 'true'
+    # X Community posting: set X_COMMUNITY_ID (from x.com/i/communities/<id>)
+    # and the bot posts a share of its daily tweets into the community.
+    # The bot's account must be a member of the community.
+    community_id = os.getenv('X_COMMUNITY_ID', '').strip() or None
+    community_post_chance = float(os.getenv('COMMUNITY_POST_CHANCE', '0.3'))
 
     # Get monitored accounts (comma-separated usernames)
     monitored_accounts_str = os.getenv('MONITORED_ACCOUNTS', '')
@@ -246,6 +251,7 @@ def main():
     print(f"  Quote Tweets: {'Enabled (max ' + str(max_quotes_per_day) + '/day)' if enable_quotes else 'Disabled'}")
     print(f"  Polls: {'Enabled (~2/week)' if enable_polls else 'Disabled'}")
     print(f"  Smart Timing: {'Enabled (posts drift to best engagement hour)' if enable_smart_timing else 'Disabled'}")
+    print(f"  Community Posting: {'Enabled (community ' + community_id + ', ' + str(int(community_post_chance*100)) + '% of daily posts)' if community_id else 'Disabled (set X_COMMUNITY_ID to enable)'}")
     print(f"  Monitored Accounts: {len(monitored_accounts)} accounts")
     if monitored_accounts:
         for acc in monitored_accounts:
@@ -439,9 +445,17 @@ def main():
                 print(f"  Generated: {tweet[:80]}...")
                 print(f"  Length: {len(tweet)} chars")
 
-                # Step 4: Post tweet (with poll options if it's a poll)
-                print("\n[4/5] Posting to X...")
-                result = twitter.post_tweet(tweet, poll_options=poll_options)
+                # Step 4: Post tweet (with poll options if it's a poll).
+                # A share of daily posts go into the X Community if configured
+                # (polls always go to the main timeline — X doesn't allow
+                # polls in communities).
+                post_community_id = None
+                if community_id and not poll_options and random.random() < community_post_chance:
+                    post_community_id = community_id
+                    print(f"\n[4/5] Posting to X (into community {community_id})...")
+                else:
+                    print("\n[4/5] Posting to X...")
+                result = twitter.post_tweet(tweet, poll_options=poll_options, community_id=post_community_id)
 
                 if result:
                     tweet_id = result.get('id')
